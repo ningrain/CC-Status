@@ -8,10 +8,12 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $sourceAgentBridge = Join-Path $projectRoot 'app\Write-AgentStatus.ps1'
 $sourceCodexBridge = Join-Path $projectRoot 'app\Write-Codex.ps1'
 $sourceClaudeBridge = Join-Path $projectRoot 'app\Write-ClaudeStatus.ps1'
+$sourceClaudePermissionWatcher = Join-Path $projectRoot 'app\Watch-ClaudePermission.ps1'
 $testRoot = Join-Path $PSScriptRoot '.test-status-bridge'
 $testAgentBridge = Join-Path $testRoot 'Write-AgentStatus.ps1'
 $testBridge = Join-Path $testRoot 'Write-Codex.ps1'
 $testClaudeBridge = Join-Path $testRoot 'Write-ClaudeStatus.ps1'
+$testClaudePermissionWatcher = Join-Path $testRoot 'Watch-ClaudePermission.ps1'
 $statePath = Join-Path $testRoot 'data\state.json'
 $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -58,7 +60,8 @@ function Invoke-ClaudeHook {
         [string]$EventName,
         [string]$SessionId = 'claude-session-1',
         [string]$PromptId = '',
-        [string]$NotificationType = ''
+        [string]$NotificationType = '',
+        [string]$TranscriptPath = ''
     )
 
     $payloadProperties = [ordered]@{
@@ -75,6 +78,9 @@ function Invoke-ClaudeHook {
     if (-not [string]::IsNullOrWhiteSpace($NotificationType)) {
         $payloadProperties.notification_type = $NotificationType
     }
+    if (-not [string]::IsNullOrWhiteSpace($TranscriptPath)) {
+        $payloadProperties.transcript_path = $TranscriptPath
+    }
 
     $payload = [pscustomobject]$payloadProperties | ConvertTo-Json -Compress
     return $payload | & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File $testClaudeBridge
@@ -87,6 +93,7 @@ $null = New-Item -ItemType Directory -Path $testRoot -Force
 Copy-Item -LiteralPath $sourceAgentBridge -Destination $testAgentBridge
 Copy-Item -LiteralPath $sourceCodexBridge -Destination $testBridge
 Copy-Item -LiteralPath $sourceClaudeBridge -Destination $testClaudeBridge
+Copy-Item -LiteralPath $sourceClaudePermissionWatcher -Destination $testClaudePermissionWatcher
 
 try {
     $output = Invoke-Hook -EventName 'UserPromptSubmit'
@@ -159,6 +166,42 @@ try {
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
     $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' })[0]
     Assert-Equal 'completed' ([string]$claudeSession.status) 'Claude idle notification should clear a stale approval state.'
+
+    $deniedTranscriptPath = Join-Path $testRoot 'claude-session-denied.jsonl'
+    $deniedToolUse = [pscustomobject]@{
+        type = 'assistant'
+        message = [pscustomobject]@{
+            content = @([pscustomobject]@{ type = 'tool_use'; id = 'test-tool-use-denied'; name = 'Bash'; input = @{ command = 'Write-Host test' } })
+        }
+    } | ConvertTo-Json -Depth 10 -Compress
+    [System.IO.File]::WriteAllText($deniedTranscriptPath, $deniedToolUse + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+
+    $output = Invoke-ClaudeHook -EventName 'UserPromptSubmit' -SessionId 'claude-session-denied' -PromptId 'claude-turn-denied'
+    Assert-NoOutput $output 'Denied Claude prompt must remain silent.'
+    $output = Invoke-ClaudeHook -EventName 'PermissionRequest' -SessionId 'claude-session-denied' -PromptId 'claude-turn-denied' -TranscriptPath $deniedTranscriptPath
+    Assert-NoOutput $output 'Denied Claude permission request must remain silent.'
+    $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    $deniedSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-denied' })[0]
+    Assert-Equal 'approval' ([string]$deniedSession.status) 'Denied Claude permission request should initially set approval state.'
+
+    $deniedToolResult = [pscustomobject]@{
+        type = 'user'
+        message = [pscustomobject]@{
+            content = @([pscustomobject]@{ type = 'tool_result'; tool_use_id = 'test-tool-use-denied'; is_error = $true; content = 'User denied permission' })
+        }
+    } | ConvertTo-Json -Depth 10 -Compress
+    [System.IO.File]::AppendAllText($deniedTranscriptPath, $deniedToolResult + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+
+    $deniedState = $null
+    $deniedDeadline = (Get-Date).AddSeconds(8)
+    do {
+        Start-Sleep -Milliseconds 250
+        if (Test-Path -LiteralPath $statePath) {
+            $candidateState = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+            $deniedState = @($candidateState.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-denied' })[0]
+        }
+    } while (($null -eq $deniedState -or [string]$deniedState.status -eq 'approval') -and (Get-Date) -lt $deniedDeadline)
+    Assert-Equal 'working' ([string]$deniedState.status) 'Manual Claude permission denial should clear approval through the transcript watcher.'
 
     $output = Invoke-ClaudeHook -EventName 'UserPromptSubmit' -SessionId 'claude-session-2' -PromptId 'claude-turn-2'
     Assert-NoOutput $output 'Second Claude prompt must remain silent.'

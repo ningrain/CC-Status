@@ -12,6 +12,7 @@ $appRoot = $PSScriptRoot
 $dataRoot = Join-Path $appRoot 'data'
 $statePath = Join-Path $dataRoot 'state.json'
 $logPath = Join-Path $dataRoot 'hook-errors.log'
+$permissionWatcherPath = Join-Path $appRoot 'Watch-ClaudePermission.ps1'
 $hookEventName = $null
 $mutex = $null
 $hasMutex = $false
@@ -53,6 +54,44 @@ function Get-ExistingProvider {
     return $value.ToLowerInvariant()
 }
 
+function Start-ClaudePermissionWatcher {
+    param(
+        [Parameter(Mandatory)][string]$SessionId,
+        [Parameter(Mandatory)][string]$TranscriptPath,
+        [string]$ToolName = ''
+    )
+
+    if (-not (Test-Path -LiteralPath $permissionWatcherPath) -or [string]::IsNullOrWhiteSpace($TranscriptPath)) {
+        return
+    }
+
+    if ($TranscriptPath.StartsWith('~\')) {
+        $TranscriptPath = Join-Path $env:USERPROFILE $TranscriptPath.Substring(2)
+    }
+    if (-not (Test-Path -LiteralPath $TranscriptPath -PathType Leaf)) {
+        return
+    }
+
+    try {
+        $powershellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $argumentList = @(
+            '-NoProfile'
+            '-ExecutionPolicy Bypass'
+            '-WindowStyle Hidden'
+            ('-File "{0}"' -f $permissionWatcherPath.Replace('"', '\"'))
+            ('-SessionId "{0}"' -f $SessionId.Replace('"', '\"'))
+            ('-TranscriptPath "{0}"' -f $TranscriptPath.Replace('"', '\"'))
+        )
+        if (-not [string]::IsNullOrWhiteSpace($ToolName)) {
+            $argumentList += ('-ToolName "{0}"' -f $ToolName.Replace('"', '\"'))
+        }
+        Start-Process -FilePath $powershellPath -ArgumentList ($argumentList -join ' ') -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+    }
+    catch {
+        # The watcher is only a fallback; never let it affect Claude Code.
+    }
+}
+
 try {
     $standardInput = [Console]::OpenStandardInput()
     $inputReader = [System.IO.StreamReader]::new($standardInput, [System.Text.UTF8Encoding]::new($false), $true)
@@ -70,6 +109,8 @@ try {
     $hookEventName = Get-StringProperty -Object $hook -Name 'hook_event_name'
     $sessionId = Get-StringProperty -Object $hook -Name 'session_id'
     $notificationType = Get-StringProperty -Object $hook -Name 'notification_type'
+    $transcriptPath = Get-StringProperty -Object $hook -Name 'transcript_path'
+    $toolName = Get-StringProperty -Object $hook -Name 'tool_name'
 
     if ([string]::IsNullOrWhiteSpace($sessionId)) {
         throw 'Hook payload did not include session_id.'
@@ -80,6 +121,7 @@ try {
         'PermissionRequest' { 'approval' }
         'PostToolUse' { 'working' }
         'PostToolUseFailure' { 'working' }
+        'PostToolBatch' { 'working' }
         'PermissionDenied' { 'working' }
         'Notification' {
             switch ($notificationType) {
@@ -208,6 +250,10 @@ try {
     $json = $state | ConvertTo-Json -Depth 8
     [System.IO.File]::WriteAllText($tempPath, $json, [System.Text.UTF8Encoding]::new($false))
     Move-Item -LiteralPath $tempPath -Destination $statePath -Force
+
+    if ($providerName -eq 'claude' -and $hookEventName -eq 'PermissionRequest') {
+        Start-ClaudePermissionWatcher -SessionId $sessionId -TranscriptPath $transcriptPath -ToolName $toolName
+    }
 }
 catch {
     Write-PrivateError -ErrorRecord $_

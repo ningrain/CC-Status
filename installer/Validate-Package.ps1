@@ -47,7 +47,7 @@ if (-not (Test-Path -LiteralPath $statusAppPs1)) {
 if (-not (Test-Path -LiteralPath $controlExe)) {
     Write-Fail "控制程序缺失：$controlExe"
 }
-foreach ($bridgeName in @('Write-AgentStatus.ps1', 'Write-Codex.ps1', 'Write-ClaudeStatus.ps1')) {
+foreach ($bridgeName in @('Write-AgentStatus.ps1', 'Write-Codex.ps1', 'Write-ClaudeStatus.ps1', 'Watch-ClaudePermission.ps1')) {
     $bridgePath = Join-Path $installRoot $bridgeName
     if (-not (Test-Path -LiteralPath $bridgePath)) {
         Write-Fail "状态桥缺失：$bridgePath"
@@ -113,7 +113,7 @@ else {
     if ($null -eq $claudeConfig.PSObject.Properties['hooks'] -or $null -eq $claudeConfig.hooks) {
         Write-Fail 'Claude settings.json 缺少 hooks 节点。'
     }
-    foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop', 'SessionEnd', 'Notification')) {
+    foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'PostToolBatch', 'Stop', 'SessionEnd', 'Notification')) {
         if ($null -eq $claudeConfig.hooks.PSObject.Properties[$eventName]) {
             Write-Fail "Claude settings.json 缺少事件 $eventName"
         }

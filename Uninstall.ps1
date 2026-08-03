@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 $codexHooksPath = Join-Path $CodexHome 'hooks.json'
 $claudeSettingsPath = Join-Path $ClaudeHome 'settings.json'
 $exitRequestPath = Join-Path $InstallRoot 'data\exit.request'
-$eventNames = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'Notification', 'Stop', 'StopFailure', 'SessionEnd')
+$eventNames = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch', 'PermissionDenied', 'Notification', 'Stop', 'StopFailure', 'SessionEnd')
 $backupRetentionDays = 30
 
 function Set-ObjectProperty {
