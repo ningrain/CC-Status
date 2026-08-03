@@ -1,0 +1,9 @@
+# Local test data
+tests/.test-*/
+
+# Generated installer build artifacts
+installer/build/*.exe
+installer/build/*.log
+
+# Temporary distribution output
+dist/*

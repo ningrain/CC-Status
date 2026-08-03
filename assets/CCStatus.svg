@@ -1,0 +1,38 @@
+<svg width="256" height="256" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="background" x1="1" y1="1" x2="19" y2="19" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#18293C"/>
+      <stop offset="1" stop-color="#07111D"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="3" y1="2.5" x2="17" y2="17.5" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1A2A3B"/>
+      <stop offset="1" stop-color="#0C1724"/>
+    </linearGradient>
+    <filter id="redGlow" x="9.2" y="11.7" width="4.3" height="4.3" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="0.28"/>
+    </filter>
+    <filter id="yellowGlow" x="11.5" y="11.7" width="4.3" height="4.3" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="0.28"/>
+    </filter>
+    <filter id="greenGlow" x="13.8" y="11.7" width="4.3" height="4.3" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="0.28"/>
+    </filter>
+  </defs>
+
+  <rect x="0.45" y="0.45" width="19.1" height="19.1" rx="4.1" fill="url(#background)" stroke="#60748D" stroke-width="0.9"/>
+  <rect x="2.05" y="2.05" width="15.9" height="15.9" rx="2.55" fill="url(#panel)" stroke="#31465E" stroke-width="0.55"/>
+  <path d="M3.65 5.1H16.35" stroke="#425A74" stroke-width="0.42"/>
+  <circle cx="4.25" cy="3.65" r="0.38" fill="#F45E68"/>
+  <circle cx="5.55" cy="3.65" r="0.38" fill="#F3C85B"/>
+  <circle cx="6.85" cy="3.65" r="0.38" fill="#4AD58A"/>
+
+  <path d="M4.15 6.55L5.35 7.7L4.15 8.85" stroke="#EAF2FC" stroke-width="0.62" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M6.3 9.05H8.1" stroke="#9CB4CF" stroke-width="0.62" stroke-linecap="round"/>
+
+  <circle cx="11.45" cy="14.75" r="1.12" fill="#F45E68" opacity="0.55" filter="url(#redGlow)"/>
+  <circle cx="13.75" cy="14.75" r="1.12" fill="#F3C85B" opacity="0.55" filter="url(#yellowGlow)"/>
+  <circle cx="16.05" cy="14.75" r="1.12" fill="#4AD58A" opacity="0.55" filter="url(#greenGlow)"/>
+  <circle cx="11.45" cy="14.75" r="0.78" fill="#E93345" stroke="#FF8990" stroke-width="0.18"/>
+  <circle cx="13.75" cy="14.75" r="0.78" fill="#E8AA2E" stroke="#FFE18A" stroke-width="0.18"/>
+  <circle cx="16.05" cy="14.75" r="0.78" fill="#27B96C" stroke="#91F2BA" stroke-width="0.18"/>
+</svg>
