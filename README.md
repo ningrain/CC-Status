@@ -58,4 +58,4 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\installer\Build-Instal
 
 构建脚本会清理旧版本安装包、编译控制程序、生成 `release\CC-Status-Setup-2.1.0.exe`，并可静默安装验证文件、版本、Hooks、桌面快捷方式和进程。可用 `-SkipValidation` 跳过安装验证。
 
-状态来源采用 Codex 的 `UserPromptSubmit`、`PermissionRequest`、`PostToolUse`、`Stop` Hooks，以及 Claude Code 的 `UserPromptSubmit`、`PermissionRequest`、`PostToolUse`、`PostToolUseFailure`、`PermissionDenied`、`Notification`、`Stop`、`StopFailure`、`SessionEnd` Hooks。`Notification` 用于兜底处理手动拒绝权限后回到等待输入的状态。
+状态来源采用 Codex 的 `UserPromptSubmit`、`PermissionRequest`、`PostToolUse`、`Stop` Hooks，以及 Claude Code 的 `UserPromptSubmit`、`PermissionRequest`、`PostToolUse`、`PostToolUseFailure`、`PostToolBatch`、`PermissionDenied`、`Notification`、`Stop`、`StopFailure`、`SessionEnd` Hooks。Claude 手动拒绝权限时，组件会监听对应 transcript 中的工具结果，避免状态卡在“需要批准”。

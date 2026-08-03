@@ -17,6 +17,7 @@ $claudeSettingsPath = Join-Path $ClaudeHome 'settings.json'
 $codexBridgePath = Join-Path $InstallRoot 'Write-Codex.ps1'
 $agentBridgePath = Join-Path $InstallRoot 'Write-AgentStatus.ps1'
 $claudeBridgePath = Join-Path $InstallRoot 'Write-ClaudeStatus.ps1'
+$claudePermissionWatcherPath = Join-Path $InstallRoot 'Watch-ClaudePermission.ps1'
 $rolloutReaderPath = Join-Path $InstallRoot 'Get-CodexRolloutState.ps1'
 $approvalReaderPath = Join-Path $InstallRoot 'Get-CodexApprovalState.ps1'
 $statusAppPath = Join-Path $InstallRoot 'CCStatus.ps1'
@@ -234,13 +235,14 @@ Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'CCStatus.ps1') -Destination $s
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Write-AgentStatus.ps1') -Destination $agentBridgePath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Write-Codex.ps1') -Destination $codexBridgePath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Write-ClaudeStatus.ps1') -Destination $claudeBridgePath -Force
+Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Watch-ClaudePermission.ps1') -Destination $claudePermissionWatcherPath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Get-CodexRolloutState.ps1') -Destination $rolloutReaderPath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Get-CodexApprovalState.ps1') -Destination $approvalReaderPath -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Uninstall.ps1') -Destination $uninstallerPath -Force
 if (Test-Path -LiteralPath $sourceIconPath) {
     Copy-Item -LiteralPath $sourceIconPath -Destination $iconPath -Force
 }
-foreach ($installedScript in @($statusAppPath, $agentBridgePath, $codexBridgePath, $claudeBridgePath, $rolloutReaderPath, $approvalReaderPath, $uninstallerPath)) {
+foreach ($installedScript in @($statusAppPath, $agentBridgePath, $codexBridgePath, $claudeBridgePath, $claudePermissionWatcherPath, $rolloutReaderPath, $approvalReaderPath, $uninstallerPath)) {
     Unblock-File -LiteralPath $installedScript -ErrorAction SilentlyContinue
 }
 
@@ -299,7 +301,7 @@ else {
             Set-ObjectProperty -Object $claudeConfig -Name 'hooks' -Value ([pscustomobject]@{})
         }
 
-        $claudeEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'Notification', 'Stop', 'StopFailure', 'SessionEnd')
+        $claudeEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch', 'PermissionDenied', 'Notification', 'Stop', 'StopFailure', 'SessionEnd')
         Remove-ExistingStatusHandlers -Config $claudeConfig -EventNames $claudeEvents
         foreach ($eventName in $claudeEvents) {
             if ($eventName -eq 'Notification') {
