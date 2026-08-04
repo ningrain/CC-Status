@@ -47,7 +47,15 @@ if (-not (Test-Path -LiteralPath $statusAppPs1)) {
 if (-not (Test-Path -LiteralPath $controlExe)) {
     Write-Fail "控制程序缺失：$controlExe"
 }
-foreach ($bridgeName in @('Write-AgentStatus.ps1', 'Write-Codex.ps1', 'Write-ClaudeStatus.ps1', 'Watch-ClaudePermission.ps1')) {
+foreach ($bridgeName in @(
+    'Write-AgentStatus.ps1',
+    'Write-Codex.ps1',
+    'Write-ClaudeStatus.ps1',
+    'Watch-ClaudePermission.ps1',
+    'Watch-ClaudeTurn.ps1',
+    'Get-AgentUsageState.ps1',
+    'Get-ClaudeTranscriptState.ps1'
+)) {
     $bridgePath = Join-Path $installRoot $bridgeName
     if (-not (Test-Path -LiteralPath $bridgePath)) {
         Write-Fail "状态桥缺失：$bridgePath"
@@ -58,8 +66,8 @@ if ($statusAppText -notmatch 'CloseButton') {
     Write-Fail '主脚本缺少 CloseButton（关闭按钮）'
 }
 $version = (Get-Item -LiteralPath $controlExe).VersionInfo.FileVersion
-if ($version -ne '2.1.0.0') {
-    Write-Fail "Control.exe 版本异常：$version（期望 2.1.0.0）"
+if ($version -ne '1.0.0.0') {
+    Write-Fail "Control.exe 版本异常：$version（期望 1.0.0.0）"
 }
 $desktopShortcutPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'CC Status.lnk'
 $installedIconPath = Join-Path $installRoot 'CCStatus.ico'

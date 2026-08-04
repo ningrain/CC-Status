@@ -14,6 +14,7 @@ function Assert-Equal {
 
 $script:CodexApprovalLogCursor = 0L
 $script:CodexApprovalStates = @{}
+$script:CodexApprovalDeniedThreads = @{}
 $threadId = '11111111-2222-3333-4444-555555555555'
 $turnId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
 $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -37,6 +38,7 @@ $resolution = [pscustomobject]@{
 }
 Update-CodexApprovalStates -Rows @($resolution)
 Assert-Equal $script:CodexApprovalStates.ContainsKey($threadId) $false 'Resolved approval was not cleared.'
+Assert-Equal $script:CodexApprovalDeniedThreads.ContainsKey($threadId) $true 'Denied approval thread was not recorded.'
 Assert-Equal $script:CodexApprovalLogCursor 11 'Approval log cursor mismatch.'
 
 $ordinaryCompletion = [pscustomobject]@{
@@ -70,5 +72,6 @@ $legacyResolution = [pscustomobject]@{
 }
 Update-CodexApprovalStates -Rows @($legacyResolution)
 Assert-Equal $script:CodexApprovalStates.Count 0 'Compact approval state was not cleared.'
+Assert-Equal $script:CodexApprovalDeniedThreads.ContainsKey($legacyThreadId) $false 'Approved approval thread was incorrectly recorded as denied.'
 
 Write-Host 'Approval monitor tests passed.' -ForegroundColor Green
