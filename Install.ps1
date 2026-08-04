@@ -18,8 +18,11 @@ $codexBridgePath = Join-Path $InstallRoot 'Write-Codex.ps1'
 $agentBridgePath = Join-Path $InstallRoot 'Write-AgentStatus.ps1'
 $claudeBridgePath = Join-Path $InstallRoot 'Write-ClaudeStatus.ps1'
 $claudePermissionWatcherPath = Join-Path $InstallRoot 'Watch-ClaudePermission.ps1'
+$claudeTurnWatcherPath = Join-Path $InstallRoot 'Watch-ClaudeTurn.ps1'
 $rolloutReaderPath = Join-Path $InstallRoot 'Get-CodexRolloutState.ps1'
 $approvalReaderPath = Join-Path $InstallRoot 'Get-CodexApprovalState.ps1'
+$usageReaderPath = Join-Path $InstallRoot 'Get-AgentUsageState.ps1'
+$claudeTranscriptReaderPath = Join-Path $InstallRoot 'Get-ClaudeTranscriptState.ps1'
 $statusAppPath = Join-Path $InstallRoot 'CCStatus.ps1'
 $sourceIconPath = Join-Path $PSScriptRoot 'assets\CCStatus.ico'
 $iconPath = Join-Path $InstallRoot 'CCStatus.ico'
@@ -236,13 +239,16 @@ Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Write-AgentStatus.ps1') -Desti
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Write-Codex.ps1') -Destination $codexBridgePath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Write-ClaudeStatus.ps1') -Destination $claudeBridgePath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Watch-ClaudePermission.ps1') -Destination $claudePermissionWatcherPath -Force
+Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Watch-ClaudeTurn.ps1') -Destination $claudeTurnWatcherPath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Get-CodexRolloutState.ps1') -Destination $rolloutReaderPath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Get-CodexApprovalState.ps1') -Destination $approvalReaderPath -Force
+Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Get-AgentUsageState.ps1') -Destination $usageReaderPath -Force
+Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Get-ClaudeTranscriptState.ps1') -Destination $claudeTranscriptReaderPath -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Uninstall.ps1') -Destination $uninstallerPath -Force
 if (Test-Path -LiteralPath $sourceIconPath) {
     Copy-Item -LiteralPath $sourceIconPath -Destination $iconPath -Force
 }
-foreach ($installedScript in @($statusAppPath, $agentBridgePath, $codexBridgePath, $claudeBridgePath, $claudePermissionWatcherPath, $rolloutReaderPath, $approvalReaderPath, $uninstallerPath)) {
+foreach ($installedScript in @($statusAppPath, $agentBridgePath, $codexBridgePath, $claudeBridgePath, $claudePermissionWatcherPath, $claudeTurnWatcherPath, $rolloutReaderPath, $approvalReaderPath, $usageReaderPath, $claudeTranscriptReaderPath, $uninstallerPath)) {
     Unblock-File -LiteralPath $installedScript -ErrorAction SilentlyContinue
 }
 

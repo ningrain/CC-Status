@@ -8,12 +8,16 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $sourceAgentBridge = Join-Path $projectRoot 'app\Write-AgentStatus.ps1'
 $sourceCodexBridge = Join-Path $projectRoot 'app\Write-Codex.ps1'
 $sourceClaudeBridge = Join-Path $projectRoot 'app\Write-ClaudeStatus.ps1'
+$sourceClaudeTranscriptState = Join-Path $projectRoot 'app\Get-ClaudeTranscriptState.ps1'
 $sourceClaudePermissionWatcher = Join-Path $projectRoot 'app\Watch-ClaudePermission.ps1'
+$sourceClaudeTurnWatcher = Join-Path $projectRoot 'app\Watch-ClaudeTurn.ps1'
 $testRoot = Join-Path $PSScriptRoot '.test-status-bridge'
 $testAgentBridge = Join-Path $testRoot 'Write-AgentStatus.ps1'
 $testBridge = Join-Path $testRoot 'Write-Codex.ps1'
 $testClaudeBridge = Join-Path $testRoot 'Write-ClaudeStatus.ps1'
+$testClaudeTranscriptState = Join-Path $testRoot 'Get-ClaudeTranscriptState.ps1'
 $testClaudePermissionWatcher = Join-Path $testRoot 'Watch-ClaudePermission.ps1'
+$testClaudeTurnWatcher = Join-Path $testRoot 'Watch-ClaudeTurn.ps1'
 $statePath = Join-Path $testRoot 'data\state.json'
 $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -93,7 +97,9 @@ $null = New-Item -ItemType Directory -Path $testRoot -Force
 Copy-Item -LiteralPath $sourceAgentBridge -Destination $testAgentBridge
 Copy-Item -LiteralPath $sourceCodexBridge -Destination $testBridge
 Copy-Item -LiteralPath $sourceClaudeBridge -Destination $testClaudeBridge
+Copy-Item -LiteralPath $sourceClaudeTranscriptState -Destination $testClaudeTranscriptState
 Copy-Item -LiteralPath $sourceClaudePermissionWatcher -Destination $testClaudePermissionWatcher
+Copy-Item -LiteralPath $sourceClaudeTurnWatcher -Destination $testClaudeTurnWatcher
 
 try {
     $output = Invoke-Hook -EventName 'UserPromptSubmit'
@@ -124,47 +130,110 @@ try {
     $output = Invoke-ClaudeHook -EventName 'UserPromptSubmit' -PromptId 'claude-turn-1'
     Assert-NoOutput $output 'Claude UserPromptSubmit must not write model-visible output.'
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
-    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' })[0]
+    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-1' })[0]
     Assert-Equal 'claude' ([string]$claudeSession.provider) 'Claude hook should identify its provider.'
     Assert-Equal 'working' ([string]$claudeSession.status) 'Claude prompt should set working state.'
     Assert-Equal 'cli' ([string]$claudeSession.surface) 'Claude hook should identify the CLI surface.'
     Assert-Equal 'claude-turn-1' ([string]$claudeSession.turnId) 'Claude prompt id should be retained as turn identity.'
     Assert-True (-not (($claudeSession | ConvertTo-Json -Depth 10) -match '不要把这段提示词')) 'Claude prompt text must not be persisted.'
 
+    $singleInterruptTranscriptPath = Join-Path $testRoot 'claude-session-single-interrupt.jsonl'
+    $singleInterruptPrompt = [pscustomobject]@{
+        type = 'user'
+        promptId = 'claude-turn-single-interrupt'
+        message = [pscustomobject]@{ role = 'user'; content = 'long running test' }
+        timestamp = '2026-08-05T00:20:00+08:00'
+    } | ConvertTo-Json -Depth 10 -Compress
+    [System.IO.File]::WriteAllText(
+        $singleInterruptTranscriptPath,
+        $singleInterruptPrompt + [Environment]::NewLine,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $output = Invoke-ClaudeHook -EventName 'UserPromptSubmit' -SessionId 'claude-session-single-interrupt' -PromptId 'claude-turn-single-interrupt' -TranscriptPath $singleInterruptTranscriptPath
+    Assert-NoOutput $output 'Single-interrupt Claude prompt must remain silent.'
+    $singleInterruptMarker = [pscustomobject]@{
+        type = 'user'
+        promptId = 'claude-turn-single-interrupt'
+        message = [pscustomobject]@{
+            role = 'user'
+            content = @([pscustomobject]@{ type = 'text'; text = '[Request interrupted by user]' })
+        }
+        timestamp = '2026-08-05T00:20:03+08:00'
+    } | ConvertTo-Json -Depth 10 -Compress
+    [System.IO.File]::AppendAllText(
+        $singleInterruptTranscriptPath,
+        $singleInterruptMarker + [Environment]::NewLine,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $singleInterruptState = $null
+    $singleInterruptDeadline = (Get-Date).AddSeconds(8)
+    do {
+        Start-Sleep -Milliseconds 250
+        if (Test-Path -LiteralPath $statePath) {
+            $candidateState = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+            $singleInterruptState = @($candidateState.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-single-interrupt' })[0]
+        }
+    } while (($null -eq $singleInterruptState -or [string]$singleInterruptState.status -eq 'working') -and (Get-Date) -lt $singleInterruptDeadline)
+    Assert-Equal 'cancelled' ([string]$singleInterruptState.status) 'One Claude Ctrl+C transcript marker should cancel the current turn without requiring SessionEnd.'
+
     $output = Invoke-ClaudeHook -EventName 'PermissionRequest' -PromptId 'claude-turn-1'
     Assert-NoOutput $output 'Claude PermissionRequest must not decide the approval.'
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
-    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' })[0]
+    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-1' })[0]
     Assert-Equal 'approval' ([string]$claudeSession.status) 'Claude permission request should set approval state.'
 
     $output = Invoke-ClaudeHook -EventName 'PostToolUse' -PromptId 'claude-turn-1'
     Assert-NoOutput $output 'Claude PostToolUse must not write model-visible output.'
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
-    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' })[0]
+    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-1' })[0]
     Assert-Equal 'working' ([string]$claudeSession.status) 'Claude tool completion should restore working state.'
 
     $output = Invoke-ClaudeHook -EventName 'Stop' -PromptId 'claude-turn-1'
     Assert-NoOutput $output 'Claude Stop must remain silent.'
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
-    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' })[0]
+    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-1' })[0]
     Assert-Equal 'completed' ([string]$claudeSession.status) 'Claude Stop should set completed state.'
+
+    $interruptedTranscriptPath = Join-Path $testRoot 'claude-session-interrupted.jsonl'
+    $interruptedPrompt = [pscustomobject]@{
+        type = 'user'
+        message = [pscustomobject]@{ content = 'long running test' }
+        timestamp = '2026-08-05T00:10:00+08:00'
+    } | ConvertTo-Json -Depth 10 -Compress
+    $interruptedMarker = [pscustomobject]@{
+        type = 'user'
+        message = [pscustomobject]@{ content = '[Request interrupted by user]' }
+        timestamp = '2026-08-05T00:10:03+08:00'
+    } | ConvertTo-Json -Depth 10 -Compress
+    [System.IO.File]::WriteAllText(
+        $interruptedTranscriptPath,
+        $interruptedPrompt + [Environment]::NewLine + $interruptedMarker + [Environment]::NewLine,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $output = Invoke-ClaudeHook -EventName 'UserPromptSubmit' -SessionId 'claude-session-interrupted' -PromptId 'claude-turn-interrupted'
+    Assert-NoOutput $output 'Interrupted Claude prompt must remain silent.'
+    $output = Invoke-ClaudeHook -EventName 'Stop' -SessionId 'claude-session-interrupted' -PromptId 'claude-turn-interrupted' -TranscriptPath $interruptedTranscriptPath
+    Assert-NoOutput $output 'Interrupted Claude Stop must remain silent.'
+    $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    $interruptedSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-interrupted' })[0]
+    Assert-Equal 'cancelled' ([string]$interruptedSession.status) 'Claude Stop with an interruption transcript should set cancelled state.'
 
     $output = Invoke-ClaudeHook -EventName 'SessionEnd' -PromptId 'claude-turn-1'
     Assert-NoOutput $output 'Claude SessionEnd must remain silent.'
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
-    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' })[0]
+    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-1' })[0]
     Assert-Equal 'completed' ([string]$claudeSession.status) 'Claude SessionEnd should not erase a recent completion.'
 
     $output = Invoke-ClaudeHook -EventName 'Notification' -NotificationType 'permission_prompt' -PromptId 'claude-turn-2'
     Assert-NoOutput $output 'Claude permission notification must remain silent.'
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
-    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' })[0]
+    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-1' })[0]
     Assert-Equal 'approval' ([string]$claudeSession.status) 'Claude permission notification should set approval state.'
 
     $output = Invoke-ClaudeHook -EventName 'Notification' -NotificationType 'idle_prompt' -PromptId 'claude-turn-2'
     Assert-NoOutput $output 'Claude idle notification must remain silent.'
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
-    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' })[0]
+    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-1' })[0]
     Assert-Equal 'completed' ([string]$claudeSession.status) 'Claude idle notification should clear a stale approval state.'
 
     $deniedTranscriptPath = Join-Path $testRoot 'claude-session-denied.jsonl'
