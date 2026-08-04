@@ -37,7 +37,7 @@ CC Status 通过 Codex 生命周期数据和 Claude Code Hooks 显示状态。�
 
 ## Hooks 自愈
 
-CC Status 启动时会自动检查 Codex 与 Claude Code 的 Hook 配置：
+CC Status 启动时会自动检查 Codex 与 Claude Code 的 Hook 配置。某些供应商切换工具（如 CC Switch）或其它配置管理程序会整体覆写 `settings.json` / `hooks.json`，导致 CC Status 的 Hook 丢失、状态不再更新。自愈机制用于在配置被覆写后自动恢复，无需手动重装：
 
 - 检查 `%USERPROFILE%\.claude\settings.json`（Claude Code）和 `%USERPROFILE%\.codex\hooks.json`（Codex）
 - 若 CC Status 的 Hook 缺失或被清空（例如被其他配置工具整体覆写），会自动补回，命令指向当前组件目录的 `Write-ClaudeStatus.ps1` / `Write-Codex.ps1`
