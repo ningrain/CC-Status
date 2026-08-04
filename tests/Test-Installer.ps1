@@ -102,8 +102,11 @@ try {
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Write-Codex.ps1')) 'Codex bridge file was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Write-ClaudeStatus.ps1')) 'Claude bridge file was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Watch-ClaudePermission.ps1')) 'Claude permission watcher was not installed.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Watch-ClaudeTurn.ps1')) 'Claude turn watcher was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Get-CodexRolloutState.ps1')) 'Rollout reader was not installed.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Get-AgentUsageState.ps1')) 'Agent usage reader was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Get-CodexApprovalState.ps1')) 'Approval reader was not installed.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Get-ClaudeTranscriptState.ps1')) 'Claude transcript reader was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'CCStatus.ico')) 'Application icon was not installed.'
     Assert-True (-not (Test-Path -LiteralPath $oldInstallCodexBackup)) 'Installer did not remove the expired Codex backup.'
     Assert-True (-not (Test-Path -LiteralPath $oldInstallClaudeBackup)) 'Installer did not remove the expired Claude backup.'
@@ -156,6 +159,7 @@ try {
     Assert-True (-not ($statusSource -match 'themeMenuItem')) 'Theme switching is still exposed from the tray menu.'
     Assert-True ($statusSource -match 'theme = \$script:currentTheme') 'CC Status does not persist the selected theme.'
     Assert-True ($packageSource -match 'OutputDir=\.\.\\release') 'Installer output is not configured for the release directory.'
+    Assert-True ($packageSource -match 'Excludes:\s*"data\\\*"') 'Installer package does not exclude local runtime data.'
 
     & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot 'Uninstall.ps1') -InstallRoot $installRoot -CodexHome $codexHome -ClaudeHome $claudeHome -SkipShortcuts
     if ($LASTEXITCODE -ne 0) { throw 'Test uninstall failed.' }

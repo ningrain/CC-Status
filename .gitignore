@@ -1,6 +1,12 @@
 # Local test data
 tests/.test-*/
 
+# Local application runtime data
+app/data/*.log
+app/data/*.pid
+app/data/state.json
+app/data/*.request
+
 # Generated installer build artifacts
 installer/build/*.exe
 installer/build/*.log

@@ -111,6 +111,9 @@ if ($null -eq (Get-Variable -Name CodexApprovalLogCursor -Scope Script -ErrorAct
 if ($null -eq (Get-Variable -Name CodexApprovalStates -Scope Script -ErrorAction SilentlyContinue)) {
     $script:CodexApprovalStates = @{}
 }
+if ($null -eq (Get-Variable -Name CodexApprovalDeniedThreads -Scope Script -ErrorAction SilentlyContinue)) {
+    $script:CodexApprovalDeniedThreads = @{}
+}
 
 function Get-CodexLogIdentity {
     param([object]$Row)
@@ -152,6 +155,7 @@ function Update-CodexApprovalStates {
             ([string]$row.Target -eq 'codex_core::stream_events_utils' -and [string]$row.Body -match 'tool_name="request_permissions"')
         if ($isApprovalRequest) {
             $timestamp = [DateTimeOffset]::FromUnixTimeSeconds([long]$row.Timestamp).ToString('o')
+            $script:CodexApprovalDeniedThreads.Remove($identity.threadId)
             $script:CodexApprovalStates[$identity.threadId] = [pscustomobject][ordered]@{
                 provider = 'codex'
                 sessionId = $identity.threadId
@@ -172,10 +176,33 @@ function Update-CodexApprovalStates {
             $existing = $script:CodexApprovalStates[$identity.threadId]
             $identityTurn = [string]$identity.turnId
             if ([string]::IsNullOrWhiteSpace($identityTurn) -or [string]$existing.turnId -eq $identityTurn) {
+                if ([string]$row.Body -match '(?i)\b(denied|rejected|declined|canceled|cancelled)\b') {
+                    $script:CodexApprovalDeniedThreads[$identity.threadId] = [DateTimeOffset]::UtcNow
+                }
                 $script:CodexApprovalStates.Remove($identity.threadId)
             }
         }
     }
+}
+
+function Get-CodexApprovalDeniedThreadIds {
+    [CmdletBinding()]
+    param(
+        [TimeSpan]$MaximumAge = ([TimeSpan]::FromMinutes(10))
+    )
+
+    $cutoff = [DateTimeOffset]::UtcNow.Subtract($MaximumAge)
+    foreach ($key in @($script:CodexApprovalDeniedThreads.Keys)) {
+        try {
+            if ([DateTimeOffset]$script:CodexApprovalDeniedThreads[$key] -lt $cutoff) {
+                $script:CodexApprovalDeniedThreads.Remove($key)
+            }
+        }
+        catch {
+            $script:CodexApprovalDeniedThreads.Remove($key)
+        }
+    }
+    return @($script:CodexApprovalDeniedThreads.Keys)
 }
 
 function Get-CodexLogApprovalSessions {

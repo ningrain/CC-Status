@@ -86,12 +86,20 @@ $showRequestPath = Join-Path $dataRoot 'show.request'
 $pidPath = Join-Path $dataRoot 'status.pid'
 $rolloutReaderPath = Join-Path $appRoot 'Get-CodexRolloutState.ps1'
 $approvalReaderPath = Join-Path $appRoot 'Get-CodexApprovalState.ps1'
+$usageReaderPath = Join-Path $appRoot 'Get-AgentUsageState.ps1'
+$claudeTranscriptReaderPath = Join-Path $appRoot 'Get-ClaudeTranscriptState.ps1'
 
 if (Test-Path -LiteralPath $rolloutReaderPath) {
     . $rolloutReaderPath
 }
 if (Test-Path -LiteralPath $approvalReaderPath) {
     . $approvalReaderPath
+}
+if (Test-Path -LiteralPath $usageReaderPath) {
+    . $usageReaderPath
+}
+if (Test-Path -LiteralPath $claudeTranscriptReaderPath) {
+    . $claudeTranscriptReaderPath
 }
 
 if (-not (Test-Path -LiteralPath $dataRoot)) {
@@ -117,7 +125,7 @@ $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="CC Status"
-        Width="350" Height="112"
+        Width="390" Height="136"
         WindowStyle="None" ResizeMode="NoResize"
         AllowsTransparency="True" Background="Transparent"
         ShowInTaskbar="False" Topmost="True">
@@ -126,14 +134,14 @@ $xaml = @"
             <Border.Effect>
                 <DropShadowEffect x:Name="CardShadow" Color="#000000" BlurRadius="24" ShadowDepth="7" Opacity="0.55" />
             </Border.Effect>
-            <Grid Margin="17,12,14,12">
+            <Grid Margin="17,4,14,4">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="55" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <Grid Grid.Column="0" Width="46" Height="46" VerticalAlignment="Center">
+                <Grid Grid.Column="0" Width="56" Height="56" VerticalAlignment="Center">
                     <Ellipse x:Name="IndicatorGlow" Fill="#224DA3FF">
                         <Ellipse.Effect>
                             <BlurEffect Radius="10" />
@@ -141,13 +149,25 @@ $xaml = @"
                     </Ellipse>
                     <Ellipse x:Name="IndicatorRing" Stroke="#4DA3FF" StrokeThickness="3" Margin="4" />
                     <TextBlock x:Name="IndicatorIcon" Text="●" Foreground="#4DA3FF" FontFamily="Segoe UI Symbol"
-                               FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                               FontSize="22" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Grid>
 
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="5,0,8,0">
-                    <TextBlock x:Name="SourceText" Text="Codex 和 Claude Code" Foreground="#A0A8B5" FontSize="10" FontWeight="SemiBold" Margin="0,0,0,2" />
-                    <TextBlock x:Name="StatusText" Text="等待任务" Foreground="#FFFFFF" FontSize="20" FontWeight="SemiBold" />
-                    <TextBlock x:Name="DetailText" Text="CC Status 当前空闲" Foreground="#BBC5D1" FontSize="11" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="SourceText" Text="Codex 和 Claude Code" Foreground="#A0A8B5" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,0" />
+                    <Grid VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="StatusText" Grid.Column="0" Text="无任务" Foreground="#FFFFFF" FontSize="26" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <StackPanel Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center">
+                            <TextBlock x:Name="CodexUsageText" Text="Codex 余- 今- 缓-" Foreground="#BBC5D1" FontSize="11" Margin="0,0,0,0"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="ClaudeUsageText" Text="Claude 今- 缓-" Foreground="#BBC5D1" FontSize="11" Margin="0,0,0,0"
+                                       TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock x:Name="DetailText" Text="CC Status 当前空闲" Foreground="#BBC5D1" FontSize="15" Margin="0,0,0,0" TextTrimming="CharacterEllipsis" />
                 </StackPanel>
 
                 <Button x:Name="OpenButton" Grid.Column="2" Content="打开" Visibility="Collapsed"
@@ -210,6 +230,8 @@ $indicatorRing = $window.FindName('IndicatorRing')
 $indicatorIcon = $window.FindName('IndicatorIcon')
 $sourceText = $window.FindName('SourceText')
 $statusText = $window.FindName('StatusText')
+$codexUsageText = $window.FindName('CodexUsageText')
+$claudeUsageText = $window.FindName('ClaudeUsageText')
 $detailText = $window.FindName('DetailText')
 $openButton = $window.FindName('OpenButton')
 $themeButton = $window.FindName('ThemeButton')
@@ -282,6 +304,8 @@ function Apply-Theme {
         $cardShadow.Opacity = 0.35
         $sourceText.Foreground = New-Brush '#64748B'
         $statusText.Foreground = New-Brush '#17212F'
+        $codexUsageText.Foreground = New-Brush '#64748B'
+        $claudeUsageText.Foreground = New-Brush '#64748B'
         $detailText.Foreground = New-Brush '#5B6675'
         $openButton.Foreground = New-Brush '#8A5800'
         $openButton.Background = New-Brush '#FFFFFFFF'
@@ -295,6 +319,8 @@ function Apply-Theme {
         $cardShadow.Opacity = 0.55
         $sourceText.Foreground = New-Brush '#A0A8B5'
         $statusText.Foreground = New-Brush '#FFFFFF'
+        $codexUsageText.Foreground = New-Brush '#BBC5D1'
+        $claudeUsageText.Foreground = New-Brush '#BBC5D1'
         $detailText.Foreground = New-Brush '#BBC5D1'
         $openButton.Foreground = New-Brush '#FFD9A0'
         $openButton.Background = New-Brush '#121212'
@@ -304,6 +330,52 @@ function Apply-Theme {
 
     $themeButton.Content = if ($Theme -eq 'dark') { '☾' } else { '☀' }
     $themeButton.ToolTip = if ($Theme -eq 'dark') { '黑色主题（点击切换为白色）' } else { '白色主题（点击切换为黑色）' }
+}
+
+function Format-UsageTokens {
+    param([object]$Value)
+
+    if ($null -eq $Value) { return '-' }
+    try {
+        $number = [double]$Value
+        if ($number -ge 1000000) { return '{0:0.0}M' -f ($number / 1000000) }
+        if ($number -ge 1000) { return '{0:0.0}K' -f ($number / 1000) }
+        return '{0:0}' -f $number
+    }
+    catch { return '-' }
+}
+
+function Format-UsagePercent {
+    param([object]$Value)
+
+    if ($null -eq $Value) { return '-' }
+    try { return '{0:0}%' -f [double]$Value } catch { return '-' }
+}
+
+function Format-UsageResetTime {
+    param([object]$Value)
+
+    if ($null -eq $Value) { return '-' }
+    try { return '{0:M月d日 HH:mm} 重置' -f ([DateTimeOffset]$Value).ToLocalTime() } catch { return '-' }
+}
+
+function Set-UsageVisual {
+    param([object]$Usage)
+
+    $codex = if ($null -ne $Usage -and $null -ne $Usage.PSObject.Properties['codex']) { $Usage.codex } else { $null }
+    $claude = if ($null -ne $Usage -and $null -ne $Usage.PSObject.Properties['claude']) { $Usage.claude } else { $null }
+    $codexWeekly = if ($null -ne $codex) { $codex.weeklyRemainingPercent } else { $null }
+    $codexTokens = if ($null -ne $codex) { $codex.totalTokens } else { $null }
+    $codexCache = if ($null -ne $codex) { $codex.cachePercent } else { $null }
+    $claudeTokens = if ($null -ne $claude) { $claude.totalTokens } else { $null }
+    $claudeCache = if ($null -ne $claude) { $claude.cachePercent } else { $null }
+    $codexLine = 'Codex 余{0} 今{1} 缓{2}' -f (Format-UsagePercent $codexWeekly), (Format-UsageTokens $codexTokens), (Format-UsagePercent $codexCache)
+    $claudeLine = 'Claude 今{0} 缓{1}' -f (Format-UsageTokens $claudeTokens), (Format-UsagePercent $claudeCache)
+    $codexUsageText.Text = $codexLine
+    $claudeUsageText.Text = $claudeLine
+    $codexReset = if ($null -ne $codex) { Format-UsageResetTime $codex.weeklyResetAt } else { '-' }
+    $codexUsageText.ToolTip = "Codex：$codexLine；$codexReset"
+    $claudeUsageText.ToolTip = "Claude：$claudeLine；周限制 -"
 }
 
 function Normalize-AgentSession {
@@ -358,12 +430,19 @@ function Set-StatusVisual {
         $openMenuItem.Text = $openLabel
     }
 
+    $codexUsageText.Visibility = 'Visible'
+    $claudeUsageText.Visibility = 'Visible'
+    $detailText.Visibility = 'Visible'
+
     switch ($State) {
         'approval' {
             $accent = '#FFB020'
             $indicatorIcon.Text = '!'
             $statusText.Text = '需要批准'
-            $detailText.Text = if ($count -gt 1) { "有 $count 个操作等待确认" } elseif ($workspace) { "$workspace · 有操作等待确认" } else { '有 1 个操作等待确认' }
+            $codexUsageText.Visibility = 'Collapsed'
+            $claudeUsageText.Visibility = 'Collapsed'
+            $detailText.Text = if ($workspace) { $workspace } elseif ($count -gt 1) { "$count 个工作区" } else { '当前项目' }
+            $detailText.Visibility = 'Visible'
             $openButton.Visibility = 'Visible'
         }
         'working' {
@@ -396,7 +475,7 @@ function Set-StatusVisual {
             $newState = 'idle'
             $accent = '#78869A'
             $indicatorIcon.Text = '·'
-            $statusText.Text = '等待任务'
+            $statusText.Text = '无任务'
             $detailText.Text = 'CC Status 当前空闲'
             $openButton.Visibility = 'Collapsed'
         }
@@ -435,7 +514,7 @@ function Set-StatusVisual {
         'approval' { "$sourceLabel：需要批准" }
         'working' { "$sourceLabel：工作中" }
         'completed' { "$sourceLabel：已完成" }
-        default { "$sourceLabel：等待任务" }
+        default { "$sourceLabel：无任务" }
     }
 }
 
@@ -450,6 +529,12 @@ function Update-StatusState {
         if (-not $window.IsVisible) { $window.Show() }
         $window.Activate()
     }
+
+    $usageState = $null
+    if (Get-Command Get-AgentUsageState -ErrorAction SilentlyContinue) {
+        try { $usageState = Get-AgentUsageState } catch {}
+    }
+    Set-UsageVisual -Usage $usageState
 
     $sessions = @()
     if (Test-Path -LiteralPath $statePath) {
@@ -481,6 +566,9 @@ function Update-StatusState {
     if (Get-Command Resolve-CodexSessionStates -ErrorAction SilentlyContinue) {
         $sessions = @(Resolve-CodexSessionStates -Sessions $sessions -Now $now)
     }
+    if (Get-Command Resolve-ClaudeTranscriptStates -ErrorAction SilentlyContinue) {
+        try { $sessions = @(Resolve-ClaudeTranscriptStates -Sessions $sessions -Now $now) } catch {}
+    }
     $activeCutoff = $now.AddHours(-12)
     $completedCutoff = $now.AddSeconds(-90)
     $staleWorkingCutoff = $now.AddMinutes(-10)
@@ -488,6 +576,10 @@ function Update-StatusState {
     $approvalSessions = @()
     $workingSessions = @()
     $completedSessions = @()
+    $deniedApprovalThreads = @()
+    if (Get-Command Get-CodexApprovalDeniedThreadIds -ErrorAction SilentlyContinue) {
+        $deniedApprovalThreads = @(Get-CodexApprovalDeniedThreadIds)
+    }
 
     foreach ($session in $sessions) {
         try {
@@ -495,6 +587,7 @@ function Update-StatusState {
             switch ([string]$session.status) {
                 'approval' { if ($updatedAt -ge $activeCutoff) { $approvalSessions += $session } }
                 'working' {
+                    if ($deniedApprovalThreads -contains [string]$session.sessionId) { continue }
                     $liveBacked = $null -ne $session.PSObject.Properties['isLive'] -and [bool]$session.isLive
                     # 仅 hook 记录的会话（如 codex exec / 无 rollout 文件的 CLI 会话）
                     # 没有文件锁存活信号，最后一次活动 120 秒后即视为已结束，
@@ -907,7 +1000,7 @@ if (-not (Test-Path -LiteralPath $trayIconPath)) {
 $ownsTrayIcon = Test-Path -LiteralPath $trayIconPath
 $trayIcon = if ($ownsTrayIcon) { New-Object System.Drawing.Icon($trayIconPath) } else { [System.Drawing.SystemIcons]::Application }
 $notifyIcon.Icon = $trayIcon
-$notifyIcon.Text = 'CC Status：等待任务'
+$notifyIcon.Text = 'CC Status：无任务'
 $notifyIcon.Visible = $true
 $script:hideTipShown = $false
 

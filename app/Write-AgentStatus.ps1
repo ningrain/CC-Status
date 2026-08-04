@@ -13,9 +13,15 @@ $dataRoot = Join-Path $appRoot 'data'
 $statePath = Join-Path $dataRoot 'state.json'
 $logPath = Join-Path $dataRoot 'hook-errors.log'
 $permissionWatcherPath = Join-Path $appRoot 'Watch-ClaudePermission.ps1'
+$turnWatcherPath = Join-Path $appRoot 'Watch-ClaudeTurn.ps1'
+$claudeTranscriptStatePath = Join-Path $appRoot 'Get-ClaudeTranscriptState.ps1'
 $hookEventName = $null
 $mutex = $null
 $hasMutex = $false
+
+if (Test-Path -LiteralPath $claudeTranscriptStatePath -PathType Leaf) {
+    try { . $claudeTranscriptStatePath } catch {}
+}
 
 function Write-PrivateError {
     param([System.Management.Automation.ErrorRecord]$ErrorRecord)
@@ -92,6 +98,40 @@ function Start-ClaudePermissionWatcher {
     }
 }
 
+function Start-ClaudeTurnWatcher {
+    param(
+        [Parameter(Mandatory)][string]$SessionId,
+        [Parameter(Mandatory)][string]$TranscriptPath,
+        [string]$PromptId = ''
+    )
+
+    if (-not (Test-Path -LiteralPath $turnWatcherPath) -or [string]::IsNullOrWhiteSpace($TranscriptPath)) {
+        return
+    }
+    if ($TranscriptPath.StartsWith('~\')) {
+        $TranscriptPath = Join-Path $env:USERPROFILE $TranscriptPath.Substring(2)
+    }
+
+    try {
+        $powershellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $argumentList = @(
+            '-NoProfile'
+            '-ExecutionPolicy Bypass'
+            '-WindowStyle Hidden'
+            ('-File "{0}"' -f $turnWatcherPath.Replace('"', '\"'))
+            ('-SessionId "{0}"' -f $SessionId.Replace('"', '\"'))
+            ('-TranscriptPath "{0}"' -f $TranscriptPath.Replace('"', '\"'))
+        )
+        if (-not [string]::IsNullOrWhiteSpace($PromptId)) {
+            $argumentList += ('-PromptId "{0}"' -f $PromptId.Replace('"', '\"'))
+        }
+        Start-Process -FilePath $powershellPath -ArgumentList ($argumentList -join ' ') -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+    }
+    catch {
+        # The watcher is a status fallback and must not affect Claude Code.
+    }
+}
+
 try {
     $standardInput = [Console]::OpenStandardInput()
     $inputReader = [System.IO.StreamReader]::new($standardInput, [System.Text.UTF8Encoding]::new($false), $true)
@@ -130,8 +170,20 @@ try {
                 default { $null }
             }
         }
-        'Stop' { 'completed' }
+        'Stop' {
+            if ($providerName -eq 'claude' -and
+                (Get-Command Get-ClaudeTranscriptInterruptionTime -ErrorAction SilentlyContinue) -and
+                -not [string]::IsNullOrWhiteSpace($transcriptPath)) {
+                $interruptedAt = $null
+                try { $interruptedAt = Get-ClaudeTranscriptInterruptionTime -Path $transcriptPath } catch {}
+                if ($null -ne $interruptedAt) { 'cancelled' } else { 'completed' }
+            }
+            else {
+                'completed'
+            }
+        }
         'StopFailure' { 'cancelled' }
+        'Interrupted' { 'cancelled' }
         'SessionEnd' { 'cancelled' }
         default { $null }
     }
@@ -253,6 +305,9 @@ try {
 
     if ($providerName -eq 'claude' -and $hookEventName -eq 'PermissionRequest') {
         Start-ClaudePermissionWatcher -SessionId $sessionId -TranscriptPath $transcriptPath -ToolName $toolName
+    }
+    if ($providerName -eq 'claude' -and $hookEventName -eq 'UserPromptSubmit') {
+        Start-ClaudeTurnWatcher -SessionId $sessionId -TranscriptPath $transcriptPath -PromptId $turnId
     }
 }
 catch {
