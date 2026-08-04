@@ -164,7 +164,7 @@ $xaml = @"
         </Border>
         <Button x:Name="ThemeButton" Content="☾" ToolTip="黑色主题（点击切换为白色）" Width="22" Height="22"
                 HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,8,34,0"
-                Background="#5A5A5A" Foreground="#F0F0F0" BorderThickness="0"
+                Background="Transparent" Foreground="#F0F0F0" BorderThickness="0"
                 FontFamily="Segoe UI Symbol" FontSize="14" Cursor="Hand">
             <Button.Template>
                 <ControlTemplate TargetType="Button">
@@ -181,7 +181,7 @@ $xaml = @"
         </Button>
         <Button x:Name="CloseButton" Content="✕" ToolTip="隐藏到托盘" Width="22" Height="22"
                 HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,8,8,0"
-                Background="#5A5A5A" Foreground="#F0F0F0" BorderThickness="0"
+                Background="Transparent" Foreground="#F0F0F0" BorderThickness="0"
                 FontFamily="Segoe UI" FontSize="11" Cursor="Hand">
             <Button.Template>
                 <ControlTemplate TargetType="Button">
@@ -285,9 +285,7 @@ function Apply-Theme {
         $detailText.Foreground = New-Brush '#5B6675'
         $openButton.Foreground = New-Brush '#8A5800'
         $openButton.Background = New-Brush '#FFFFFFFF'
-        $themeButton.Background = New-Brush '#EAF0F5'
         $themeButton.Foreground = New-Brush '#9A6700'
-        $closeButton.Background = New-Brush '#DDE5ED'
         $closeButton.Foreground = New-Brush '#334155'
     }
     else {
@@ -300,9 +298,7 @@ function Apply-Theme {
         $detailText.Foreground = New-Brush '#BBC5D1'
         $openButton.Foreground = New-Brush '#FFD9A0'
         $openButton.Background = New-Brush '#121212'
-        $themeButton.Background = New-Brush '#5A5A5A'
         $themeButton.Foreground = New-Brush '#F0F0F0'
-        $closeButton.Background = New-Brush '#5A5A5A'
         $closeButton.Foreground = New-Brush '#F0F0F0'
     }
 
@@ -679,6 +675,10 @@ function Open-Codex {
 
 $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
 $trayIconPath = Join-Path $appRoot 'CCStatus.ico'
+if (-not (Test-Path -LiteralPath $trayIconPath)) {
+    $assetIconPath = Join-Path (Split-Path -Parent $appRoot) 'assets\CCStatus.ico'
+    if (Test-Path -LiteralPath $assetIconPath) { $trayIconPath = $assetIconPath }
+}
 $ownsTrayIcon = Test-Path -LiteralPath $trayIconPath
 $trayIcon = if ($ownsTrayIcon) { New-Object System.Drawing.Icon($trayIconPath) } else { [System.Drawing.SystemIcons]::Application }
 $notifyIcon.Icon = $trayIcon
