@@ -673,6 +673,231 @@ function Open-Codex {
     catch {}
 }
 
+function Add-HookProperty {
+    param(
+        [Parameter(Mandatory)]$Object,
+        [Parameter(Mandatory)][string]$Name,
+        $Value
+    )
+
+    if ($null -ne $Object.PSObject.Properties[$Name]) {
+        $Object.$Name = $Value
+    }
+    else {
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+    }
+}
+
+function Test-StatusHandler {
+    param($Handler)
+
+    if ($null -eq $Handler) { return $false }
+    $command = ''
+    if ($null -ne $Handler.PSObject.Properties['command']) { $command += [string]$Handler.command }
+    if ($null -ne $Handler.PSObject.Properties['commandWindows']) { $command += [string]$Handler.commandWindows }
+    return $command -match '(?i)Write-(AgentStatus|ClaudeStatus|Codex)\.ps1'
+}
+
+function Test-EventHasStatusHandler {
+    param(
+        [Parameter(Mandatory)]$Hooks,
+        [Parameter(Mandatory)][string]$EventName
+    )
+
+    if ($null -eq $Hooks.PSObject.Properties[$EventName]) { return $false }
+    foreach ($group in @($Hooks.$EventName)) {
+        $handlers = @()
+        if ($null -ne $group.PSObject.Properties['hooks']) { $handlers = @($group.hooks) }
+        foreach ($handler in $handlers) {
+            if (Test-StatusHandler $handler) { return $true }
+        }
+    }
+    return $false
+}
+
+function Test-NotificationMatcherHandler {
+    param(
+        [Parameter(Mandatory)]$Hooks,
+        [Parameter(Mandatory)][string]$Matcher
+    )
+
+    if ($null -eq $Hooks.PSObject.Properties['Notification']) { return $false }
+    foreach ($group in @($Hooks.Notification)) {
+        $groupMatcher = ''
+        if ($null -ne $group.PSObject.Properties['matcher']) { $groupMatcher = [string]$group.matcher }
+        if ($groupMatcher -ne $Matcher) { continue }
+        $handlers = @()
+        if ($null -ne $group.PSObject.Properties['hooks']) { $handlers = @($group.hooks) }
+        foreach ($handler in $handlers) {
+            if (Test-StatusHandler $handler) { return $true }
+        }
+    }
+    return $false
+}
+
+function Add-ClaudeStatusHook {
+    param(
+        [Parameter(Mandatory)]$Hooks,
+        [Parameter(Mandatory)][string]$EventName,
+        [Parameter(Mandatory)][string]$ScriptPath,
+        [string]$Matcher
+    )
+
+    $escapedPath = $ScriptPath.Replace("'", "''")
+    $handler = [pscustomobject][ordered]@{
+        type = 'command'
+        shell = 'powershell'
+        command = "& '$escapedPath'"
+        timeout = 5
+    }
+
+    $groupProperties = [ordered]@{}
+    if (-not [string]::IsNullOrWhiteSpace($Matcher)) {
+        $groupProperties.matcher = $Matcher
+    }
+    $groupProperties.hooks = @($handler)
+    $group = [pscustomobject]$groupProperties
+
+    $groups = @()
+    if ($null -ne $Hooks.PSObject.Properties[$EventName]) {
+        $groups = @($Hooks.$EventName)
+    }
+    $groups += $group
+    Add-HookProperty -Object $Hooks -Name $EventName -Value $groups
+}
+
+function Add-CodexStatusHook {
+    param(
+        [Parameter(Mandatory)]$Hooks,
+        [Parameter(Mandatory)][string]$EventName,
+        [string]$Matcher,
+        [Parameter(Mandatory)][string]$Command
+    )
+
+    $handler = [pscustomobject][ordered]@{
+        type = 'command'
+        command = $Command
+        commandWindows = $Command
+        timeout = 5
+        statusMessage = 'Updating CC Status'
+    }
+
+    $groupProperties = [ordered]@{}
+    if (-not [string]::IsNullOrWhiteSpace($Matcher)) {
+        $groupProperties.matcher = $Matcher
+    }
+    $groupProperties.hooks = @($handler)
+    $group = [pscustomobject]$groupProperties
+
+    $groups = @()
+    if ($null -ne $Hooks.PSObject.Properties[$EventName]) {
+        $groups = @($Hooks.$EventName)
+    }
+    $groups += $group
+    Add-HookProperty -Object $Hooks -Name $EventName -Value $groups
+}
+
+function Save-ConfigAtomic {
+    param(
+        [Parameter(Mandatory)]$Value,
+        [Parameter(Mandatory)][string]$Path
+    )
+
+    $tempPath = '{0}.repair.tmp' -f $Path
+    $json = $Value | ConvertTo-Json -Depth 20
+    [System.IO.File]::WriteAllText($tempPath, $json, [System.Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $tempPath -Destination $Path -Force
+}
+
+function Write-RepairLog {
+    param([string]$Message)
+
+    try {
+        if (-not (Test-Path -LiteralPath $dataRoot)) {
+            $null = New-Item -ItemType Directory -Path $dataRoot -Force
+        }
+        $logPath = Join-Path $dataRoot 'hook-repair.log'
+        $line = '{0:o} {1}' -f [DateTimeOffset]::UtcNow, $Message
+        [System.IO.File]::AppendAllText($logPath, $line + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    }
+    catch {}
+}
+
+function Repair-StatusHooks {
+    $claudeBridgePath = Join-Path $appRoot 'Write-ClaudeStatus.ps1'
+    $codexBridgePath = Join-Path $appRoot 'Write-Codex.ps1'
+
+    if (Test-Path -LiteralPath $claudeBridgePath) {
+        try {
+            $claudeSettingsPath = Join-Path $env:USERPROFILE '.claude\settings.json'
+            $config = [pscustomobject][ordered]@{}
+            if (Test-Path -LiteralPath $claudeSettingsPath) {
+                $config = [System.IO.File]::ReadAllText($claudeSettingsPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+            }
+            if ($null -eq $config.PSObject.Properties['hooks'] -or $null -eq $config.hooks) {
+                Add-HookProperty -Object $config -Name 'hooks' -Value ([pscustomobject]@{})
+            }
+
+            $claudeEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch', 'PermissionDenied', 'Stop', 'StopFailure', 'SessionEnd')
+            $changed = $false
+            foreach ($eventName in $claudeEvents) {
+                if (-not (Test-EventHasStatusHandler -Hooks $config.hooks -EventName $eventName)) {
+                    Add-ClaudeStatusHook -Hooks $config.hooks -EventName $eventName -ScriptPath $claudeBridgePath
+                    $changed = $true
+                }
+            }
+            foreach ($matcher in @('permission_prompt', 'idle_prompt')) {
+                if (-not (Test-NotificationMatcherHandler -Hooks $config.hooks -Matcher $matcher)) {
+                    Add-ClaudeStatusHook -Hooks $config.hooks -EventName 'Notification' -ScriptPath $claudeBridgePath -Matcher $matcher
+                    $changed = $true
+                }
+            }
+
+            if ($changed) {
+                Save-ConfigAtomic -Value $config -Path $claudeSettingsPath
+                Write-RepairLog "claude hooks restored: $claudeSettingsPath"
+            }
+        }
+        catch {
+            Write-RepairLog ('claude hooks repair failed: ' + $_.Exception.Message)
+        }
+    }
+
+    if (Test-Path -LiteralPath $codexBridgePath) {
+        try {
+            $codexHooksPath = Join-Path $env:USERPROFILE '.codex\hooks.json'
+            $config = [pscustomobject][ordered]@{}
+            if (Test-Path -LiteralPath $codexHooksPath) {
+                $config = [System.IO.File]::ReadAllText($codexHooksPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+            }
+            if ($null -eq $config.PSObject.Properties['hooks'] -or $null -eq $config.hooks) {
+                Add-HookProperty -Object $config -Name 'hooks' -Value ([pscustomobject]@{})
+            }
+
+            $escapedCodexBridgePath = $codexBridgePath.Replace('"', '\"')
+            $codexHookCommand = 'powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "{0}"' -f $escapedCodexBridgePath
+
+            $codexEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop')
+            $changed = $false
+            foreach ($eventName in $codexEvents) {
+                if (-not (Test-EventHasStatusHandler -Hooks $config.hooks -EventName $eventName)) {
+                    $matcher = if ($eventName -eq 'PermissionRequest' -or $eventName -eq 'PostToolUse') { '.*' } else { '' }
+                    Add-CodexStatusHook -Hooks $config.hooks -EventName $eventName -Matcher $matcher -Command $codexHookCommand
+                    $changed = $true
+                }
+            }
+
+            if ($changed) {
+                Save-ConfigAtomic -Value $config -Path $codexHooksPath
+                Write-RepairLog "codex hooks restored: $codexHooksPath"
+            }
+        }
+        catch {
+            Write-RepairLog ('codex hooks repair failed: ' + $_.Exception.Message)
+        }
+    }
+}
+
 $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
 $trayIconPath = Join-Path $appRoot 'CCStatus.ico'
 if (-not (Test-Path -LiteralPath $trayIconPath)) {
@@ -772,6 +997,7 @@ $window.add_Closed({
     $window.Dispatcher.InvokeShutdown()
 })
 
+Repair-StatusHooks
 Update-StatusState
 $timer.Start()
 $window.Show()
