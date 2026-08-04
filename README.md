@@ -35,6 +35,18 @@ CC Status 通过 Codex 生命周期数据和 Claude Code Hooks 显示状态。�
 - “已完成”显示 90 秒，随后恢复为灰色等待状态。
 - 多任务状态优先级为：需要批准 > 工作中 > 已完成。
 
+## Hooks 自愈
+
+CC Status 启动时会自动检查 Codex 与 Claude Code 的 Hook 配置：
+
+- 检查 `%USERPROFILE%\.claude\settings.json`（Claude Code）和 `%USERPROFILE%\.codex\hooks.json`（Codex）
+- 若 CC Status 的 Hook 缺失或被清空（例如被其他配置工具整体覆写），会自动补回，命令指向当前组件目录的 `Write-ClaudeStatus.ps1` / `Write-Codex.ps1`
+- 只增不减：保留文件中的其他字段（env、model、theme 以及其他程序的 Hook），不删除任何已有配置
+- 幂等：配置完好时重启不触碰文件；修复记录写入 `app\data\hook-repair.log`
+- 修复失败只记日志，不影响组件启动
+
+注意：Claude Code 的 Hook 配置在会话启动时读取，修复后需新开对话才生效。
+
 ## 卸载
 
 使用开始菜单里的“卸载 CC Status”，或双击安装包中的 `Uninstall.cmd`。卸载程序只删除本组件添加的 Hook、启动入口和安装目录，并在修改 Codex/Claude 配置前创建备份；安装或卸载时会自动清理 30 天以前的 `hooks.json` / `settings.json` 备份。
