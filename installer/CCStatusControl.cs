@@ -1,6 +1,5 @@
 using System;
 using System.Diagnostics;
-using System.Drawing;
 using System.IO;
 using System.Reflection;
 using System.Text;
@@ -40,9 +39,6 @@ internal static class CCStatusControl
                 return 0;
             }
 
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(CreateControlWindow());
             return 0;
         }
         catch (Exception exception)
@@ -103,67 +99,5 @@ internal static class CCStatusControl
         File.WriteAllText(ExitRequestPath, DateTimeOffset.UtcNow.ToString("o"), new UTF8Encoding(false));
         for (int index = 0; index < 25 && File.Exists(PidPath); index++)
             Thread.Sleep(100);
-    }
-
-    private static Form CreateControlWindow()
-    {
-        Form form = new Form
-        {
-            Text = "CC Status 控制中心",
-            StartPosition = FormStartPosition.CenterScreen,
-            FormBorderStyle = FormBorderStyle.FixedDialog,
-            MaximizeBox = false,
-            MinimizeBox = false,
-            ClientSize = new Size(360, 176),
-            Font = new Font("Microsoft YaHei UI", 9F)
-        };
-        form.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-        Label description = new Label
-        {
-            AutoSize = false,
-            Text = "手动打开或退出 CC Status。",
-            Location = new Point(24, 22),
-            Size = new Size(312, 32),
-            TextAlign = ContentAlignment.MiddleCenter
-        };
-        Button startButton = new Button
-        {
-            Text = "打开 CC Status",
-            Location = new Point(24, 74),
-            Size = new Size(144, 42)
-        };
-        Button stopButton = new Button
-        {
-            Text = "退出 CC Status",
-            Location = new Point(192, 74),
-            Size = new Size(144, 42)
-        };
-        Button closeButton = new Button
-        {
-            Text = "关闭",
-            Location = new Point(128, 132),
-            Size = new Size(104, 30),
-            DialogResult = DialogResult.Cancel
-        };
-
-        startButton.Click += delegate
-        {
-            StartStatusApp();
-            MessageBox.Show(form, "已发送打开请求。", "CC Status", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        };
-        stopButton.Click += delegate
-        {
-            StopStatusApp();
-            MessageBox.Show(form, "小组件已退出。", "CC Status", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        };
-        closeButton.Click += delegate { form.Close(); };
-
-        form.AcceptButton = startButton;
-        form.CancelButton = closeButton;
-        form.Controls.Add(description);
-        form.Controls.Add(startButton);
-        form.Controls.Add(stopButton);
-        form.Controls.Add(closeButton);
-        return form;
     }
 }

@@ -47,7 +47,6 @@ Type: files; Name: "{userdesktop}\CC Status.lnk"
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "CC Status"; ValueData: """{app}\{#MyAppExeName}"" /start"; Flags: uninsdeletevalue
 
 [Icons]
-Name: "{group}\CC Status 控制中心"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\CCStatus.ico"
 Name: "{group}\打开 CC Status"; Filename: "{app}\{#MyAppExeName}"; Parameters: "/start"; IconFilename: "{app}\CCStatus.ico"
 Name: "{group}\退出 CC Status"; Filename: "{app}\{#MyAppExeName}"; Parameters: "/exit"; IconFilename: "{app}\CCStatus.ico"
 Name: "{group}\卸载 CC Status"; Filename: "{uninstallexe}"; IconFilename: "{app}\CCStatus.ico"
