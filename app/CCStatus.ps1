@@ -427,9 +427,6 @@ function Set-StatusVisual {
     }
     $openLabel = if ($script:currentOpenSurface -eq 'cli') { '打开终端' } elseif ($script:currentOpenProvider -eq 'claude') { '打开 Claude Code' } else { '打开 Codex' }
     $openButton.Content = $openLabel
-    if ($null -ne (Get-Variable -Name openMenuItem -Scope Script -ErrorAction SilentlyContinue)) {
-        $openMenuItem.Text = $openLabel
-    }
 
     $codexUsageText.Visibility = 'Visible'
     $claudeUsageText.Visibility = 'Visible'
@@ -1016,7 +1013,6 @@ $script:hideTipShown = $false
 
 $contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $showMenuItem = $contextMenu.Items.Add('显示 / 隐藏')
-$openMenuItem = $contextMenu.Items.Add('打开')
 $topmostMenuItem = $contextMenu.Items.Add('保持置顶')
 $topmostMenuItem.Checked = $true
 $null = $contextMenu.Items.Add('-')
@@ -1026,7 +1022,6 @@ $notifyIcon.ContextMenuStrip = $contextMenu
 $showMenuItem.add_Click({
     if ($window.IsVisible) { $window.Hide() } else { $window.Show(); $window.Activate() }
 })
-$openMenuItem.add_Click({ Open-Codex })
 $themeButton.add_Click({
     $nextTheme = if ($script:currentTheme -eq 'dark') { 'light' } else { 'dark' }
     Apply-Theme -Theme $nextTheme
