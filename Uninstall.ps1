@@ -14,7 +14,6 @@ $codexHooksPath = Join-Path $CodexHome 'hooks.json'
 $claudeSettingsPath = Join-Path $ClaudeHome 'settings.json'
 $exitRequestPath = Join-Path $InstallRoot 'data\exit.request'
 $eventNames = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch', 'PermissionDenied', 'Notification', 'Stop', 'StopFailure', 'SessionEnd')
-$backupRetentionDays = 30
 
 function Set-ObjectProperty {
     param($Object, [string]$Name, $Value)
@@ -29,24 +28,6 @@ function Test-StatusHandler {
     if ($null -ne $Handler.PSObject.Properties['command']) { $command += [string]$Handler.command }
     if ($null -ne $Handler.PSObject.Properties['commandWindows']) { $command += [string]$Handler.commandWindows }
     return $command -match '(?i)Write-(AgentStatus|ClaudeStatus|Codex)\.ps1'
-}
-
-function Remove-ExpiredBackups {
-    param([Parameter(Mandatory)][string]$Directory)
-
-    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) { return }
-
-    $cutoff = (Get-Date).AddDays(-$backupRetentionDays)
-    $expired = @(Get-ChildItem -LiteralPath $Directory -File -Force -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.Name -match '^(hooks|settings)\.json\..+\.bak$' -and $_.LastWriteTime -lt $cutoff
-        })
-    foreach ($file in $expired) {
-        Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
-    }
-    if ($expired.Count -gt 0) {
-        Write-Host "CC Status 已清理 $($expired.Count) 个超过 $backupRetentionDays 天的配置备份。" -ForegroundColor DarkGray
-    }
 }
 
 function Read-JsonConfig {
@@ -89,9 +70,6 @@ function Remove-StatusHandlers {
     Move-Item -LiteralPath $tempPath -Destination $Path -Force
 }
 
-Remove-ExpiredBackups -Directory $CodexHome
-Remove-ExpiredBackups -Directory $ClaudeHome
-
 if (Test-Path -LiteralPath $codexHooksPath) {
     $codexConfig = Read-JsonConfig -Path $codexHooksPath -Description 'Codex hooks.json'
     Remove-StatusHandlers -Config $codexConfig -Path $codexHooksPath -BackupSuffix 'before-ccstatus-uninstall'
@@ -102,13 +80,31 @@ if (Test-Path -LiteralPath $claudeSettingsPath) {
     Remove-StatusHandlers -Config $claudeConfig -Path $claudeSettingsPath -BackupSuffix 'before-ccstatus-uninstall'
 }
 
-if (-not $SkipFileRemoval -and (Test-Path -LiteralPath $InstallRoot)) {
+if (Test-Path -LiteralPath $InstallRoot) {
     $dataRoot = Join-Path $InstallRoot 'data'
+    $pidPath = Join-Path $dataRoot 'status.pid'
     if (-not (Test-Path -LiteralPath $dataRoot)) {
         $null = New-Item -ItemType Directory -Path $dataRoot -Force
     }
-    [System.IO.File]::WriteAllText($exitRequestPath, [DateTimeOffset]::UtcNow.ToString('o'))
-    Start-Sleep -Milliseconds 1500
+    [System.IO.File]::WriteAllText($exitRequestPath, [DateTimeOffset]::UtcNow.ToString('o'), [System.Text.UTF8Encoding]::new($false))
+    $widgetPid = $null
+    if (Test-Path -LiteralPath $pidPath) {
+        $pidText = [string](Get-Content -LiteralPath $pidPath -Raw -ErrorAction SilentlyContinue)
+        $pidText = $pidText.Trim()
+        if ($pidText -match '^\d+$') { $widgetPid = [int]$pidText }
+    }
+    $stopDeadline = (Get-Date).AddSeconds(8)
+    do {
+        Start-Sleep -Milliseconds 200
+        $widgetProcess = if ($null -ne $widgetPid) { Get-Process -Id $widgetPid -ErrorAction SilentlyContinue } else { $null }
+    } while (($null -ne $widgetProcess -or (Test-Path -LiteralPath $pidPath)) -and (Get-Date) -lt $stopDeadline)
+    if ($null -ne $widgetProcess -and $null -ne $widgetPid) {
+        $processDetails = Get-CimInstance Win32_Process -Filter "ProcessId=$widgetPid" -ErrorAction SilentlyContinue
+        $expectedScript = Join-Path $InstallRoot 'CCStatus.ps1'
+        if ($null -ne $processDetails -and [string]$processDetails.CommandLine -like ('*' + $expectedScript + '*')) {
+            Stop-Process -Id $widgetPid -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 if (-not $SkipShortcuts) {
@@ -133,7 +129,7 @@ if (-not $SkipShortcuts) {
     }
 }
 
-if (Test-Path -LiteralPath $InstallRoot) {
+if (-not $SkipFileRemoval -and (Test-Path -LiteralPath $InstallRoot)) {
     $cleanupScript = Join-Path ([System.IO.Path]::GetTempPath()) ('ccstatus-cleanup-{0}.ps1' -f [Guid]::NewGuid().ToString('N'))
     $escapedRoot = $InstallRoot.Replace("'", "''")
     $cleanup = "Start-Sleep -Milliseconds 800`nRemove-Item -LiteralPath '$escapedRoot' -Recurse -Force -ErrorAction SilentlyContinue`nRemove-Item -LiteralPath `$PSCommandPath -Force -ErrorAction SilentlyContinue"

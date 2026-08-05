@@ -8,7 +8,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$releaseRoot = Join-Path $projectRoot 'release'
+$outputRoot = Split-Path -Parent $projectRoot
 if ([string]::IsNullOrWhiteSpace($InnoCompiler)) {
     $InnoCompiler = Join-Path $projectRoot 'tools\Inno Setup 6\ISCC.exe'
 }
@@ -42,17 +42,16 @@ function Remove-StalePackages {
 }
 
 $null = New-Item -ItemType Directory -Path $buildRoot -Force
-$null = New-Item -ItemType Directory -Path $releaseRoot -Force
+$null = New-Item -ItemType Directory -Path $outputRoot -Force
 & $compiler /nologo /target:winexe /optimize+ ("/out:$control") ("/win32icon:$icon") /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll $source
 if ($LASTEXITCODE -ne 0) { throw "控制程序编译失败：$LASTEXITCODE" }
 
-Remove-StalePackages -Directory $projectRoot
-Remove-StalePackages -Directory $releaseRoot
+Remove-StalePackages -Directory $outputRoot
 
 & $InnoCompiler $definition
 if ($LASTEXITCODE -ne 0) { throw "安装包编译失败：$LASTEXITCODE" }
 
-$package = Join-Path $releaseRoot "CC-Status-Setup-$version.exe"
+$package = Join-Path $outputRoot "CC-Status-Setup-$version.exe"
 Write-Host '安装包生成完成。' -ForegroundColor Green
 Get-Item -LiteralPath $package
 

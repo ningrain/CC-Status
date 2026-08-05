@@ -105,11 +105,12 @@ try {
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Watch-ClaudeTurn.ps1')) 'Claude turn watcher was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Get-CodexRolloutState.ps1')) 'Rollout reader was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Get-AgentUsageState.ps1')) 'Agent usage reader was not installed.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Get-CCSwitchUsage.ps1')) 'CC Switch usage reader was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Get-CodexApprovalState.ps1')) 'Approval reader was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Get-ClaudeTranscriptState.ps1')) 'Claude transcript reader was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'CCStatus.ico')) 'Application icon was not installed.'
-    Assert-True (-not (Test-Path -LiteralPath $oldInstallCodexBackup)) 'Installer did not remove the expired Codex backup.'
-    Assert-True (-not (Test-Path -LiteralPath $oldInstallClaudeBackup)) 'Installer did not remove the expired Claude backup.'
+    Assert-True (Test-Path -LiteralPath $oldInstallCodexBackup) 'Installer removed an existing Codex backup.'
+    Assert-True (Test-Path -LiteralPath $oldInstallClaudeBackup) 'Installer removed an existing Claude backup.'
 
     $installedConfig = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json
     Assert-True (@($installedConfig.hooks.UserPromptSubmit).Count -eq 1) 'UserPromptSubmit hook was not added.'
@@ -142,6 +143,7 @@ try {
 
     $installerSource = Get-Content -LiteralPath (Join-Path $projectRoot 'Install.ps1') -Raw
     Assert-True (-not ($installerSource -match 'CreateShortcut|WScript\.Shell')) 'Installer still creates script-targeting LNK files.'
+    Assert-True (-not ($installerSource -match 'Remove-ExpiredBackups|backupRetentionDays')) 'Installer still contains backup cleanup logic.'
     Assert-True ($installerSource -match 'CurrentVersion\\Run') 'Installer does not configure the HKCU Run startup entry.'
     Assert-True ($installerSource -match 'Desktop') 'Installer does not handle the legacy desktop shortcut.'
 
@@ -158,21 +160,48 @@ try {
     Assert-True (($statusSource -match "'☾'") -and ($statusSource -match "'☀'")) 'Theme button does not use moon and sun icons.'
     Assert-True (-not ($statusSource -match 'themeMenuItem')) 'Theme switching is still exposed from the tray menu.'
     Assert-True ($statusSource -match 'theme = \$script:currentTheme') 'CC Status does not persist the selected theme.'
-    Assert-True ($packageSource -match 'OutputDir=\.\.\\release') 'Installer output is not configured for the release directory.'
+    Assert-True ($packageSource -match 'OutputDir=\.\.\\\.\.') 'Installer output is not configured for the project parent directory.'
     Assert-True ($packageSource -match 'Excludes:\s*"data\\\*"') 'Installer package does not exclude local runtime data.'
 
-    & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot 'Uninstall.ps1') -InstallRoot $installRoot -CodexHome $codexHome -ClaudeHome $claudeHome -SkipShortcuts
-    if ($LASTEXITCODE -ne 0) { throw 'Test uninstall failed.' }
+    $installedStatusPath = Join-Path $installRoot 'CCStatus.ps1'
+    $installedPidPath = Join-Path $installRoot 'data\status.pid'
+    $installedExitPath = Join-Path $installRoot 'data\exit.request'
+    $runningFixture = @'
+$dataRoot = Join-Path $PSScriptRoot 'data'
+$pidPath = Join-Path $dataRoot 'status.pid'
+$exitPath = Join-Path $dataRoot 'exit.request'
+$null = New-Item -ItemType Directory -Path $dataRoot -Force
+[System.IO.File]::WriteAllText($pidPath, [string]$PID, [System.Text.UTF8Encoding]::new($false))
+try {
+    while (-not (Test-Path -LiteralPath $exitPath)) { Start-Sleep -Milliseconds 100 }
+}
+finally {
+    Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
+}
+'@
+    [System.IO.File]::WriteAllText($installedStatusPath, $runningFixture, [System.Text.UTF8Encoding]::new($false))
+    Remove-Item -LiteralPath $installedExitPath -Force -ErrorAction SilentlyContinue
+    $fixtureProcess = Start-Process -FilePath $windowsPowerShell -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $installedStatusPath) -WindowStyle Hidden -PassThru
+    $fixtureDeadline = (Get-Date).AddSeconds(10)
+    do { Start-Sleep -Milliseconds 100 } while (-not (Test-Path -LiteralPath $installedPidPath) -and (Get-Date) -lt $fixtureDeadline)
+    Assert-True (Test-Path -LiteralPath $installedPidPath) 'Running uninstall fixture did not start.'
 
-    Start-Sleep -Milliseconds 1200
+    & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot 'Uninstall.ps1') -InstallRoot $installRoot -CodexHome $codexHome -ClaudeHome $claudeHome -SkipShortcuts -SkipFileRemoval
+    if ($LASTEXITCODE -ne 0) { throw 'Test uninstall failed.' }
+    $fixtureProcess.WaitForExit(5000) | Out-Null
+    Assert-True $fixtureProcess.HasExited 'Uninstaller left the running CC Status process alive.'
+    Assert-True (Test-Path -LiteralPath $installRoot) 'SkipFileRemoval should leave file deletion to the package uninstaller.'
+
     $uninstalledConfig = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json
     Assert-True (($uninstalledConfig | ConvertTo-Json -Depth 20) -match 'keep-me\.ps1') 'Uninstaller removed an unrelated hook.'
     Assert-True (-not (($uninstalledConfig | ConvertTo-Json -Depth 20) -match 'Write-Codex\.ps1')) 'Uninstaller left Codex status hooks behind.'
     $uninstalledClaudeConfig = Get-Content -LiteralPath $claudeSettingsPath -Raw | ConvertFrom-Json
     Assert-True (($uninstalledClaudeConfig | ConvertTo-Json -Depth 20) -match 'keep-claude-me\.ps1') 'Uninstaller removed an unrelated Claude hook.'
     Assert-True (-not (($uninstalledClaudeConfig | ConvertTo-Json -Depth 20) -match 'Write-ClaudeStatus\.ps1')) 'Uninstaller left Claude status hooks behind.'
-    Assert-True (-not (Test-Path -LiteralPath $oldUninstallCodexBackup)) 'Uninstaller did not remove the expired Codex backup.'
-    Assert-True (-not (Test-Path -LiteralPath $oldUninstallClaudeBackup)) 'Uninstaller did not remove the expired Claude backup.'
+    Assert-True (Test-Path -LiteralPath $oldUninstallCodexBackup) 'Uninstaller removed an existing Codex backup.'
+    Assert-True (Test-Path -LiteralPath $oldUninstallClaudeBackup) 'Uninstaller removed an existing Claude backup.'
+    $uninstallerSource = Get-Content -LiteralPath (Join-Path $projectRoot 'Uninstall.ps1') -Raw
+    Assert-True (-not ($uninstallerSource -match 'Remove-ExpiredBackups|backupRetentionDays')) 'Uninstaller still contains backup cleanup logic.'
 
     $invalidClaudeHome = Join-Path $testRoot 'invalid-claude-home'
     $invalidClaudePath = Join-Path $invalidClaudeHome 'settings.json'

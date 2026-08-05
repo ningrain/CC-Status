@@ -7,6 +7,11 @@ if ($null -eq (Get-Variable -Name AgentUsageFileCache -Scope Script -ErrorAction
     $script:AgentUsageFileCache = @{}
 }
 
+$ccSwitchUsageReaderPath = Join-Path $PSScriptRoot 'Get-CCSwitchUsage.ps1'
+if (Test-Path -LiteralPath $ccSwitchUsageReaderPath -PathType Leaf) {
+    try { . $ccSwitchUsageReaderPath } catch {}
+}
+
 function Get-AgentUsageProperty {
     param(
         [object]$Object,
@@ -175,6 +180,8 @@ function Read-ClaudeUsageFileSummary {
 
     $summary = New-AgentUsageFileSummary -Provider 'claude'
     $stream = $null
+    $snapshots = @{}
+    $anonymousIndex = 0
     try {
         $stream = [System.IO.File]::Open(
             $File.FullName,
@@ -198,17 +205,49 @@ function Read-ClaudeUsageFileSummary {
             $output = ConvertTo-AgentUsageLong -Value (Get-AgentUsageProperty -Object $usage -Name 'output_tokens')
             $cached = ConvertTo-AgentUsageLong -Value (Get-AgentUsageProperty -Object $usage -Name 'cache_read_input_tokens')
             $cacheCreated = ConvertTo-AgentUsageLong -Value (Get-AgentUsageProperty -Object $usage -Name 'cache_creation_input_tokens')
-            $added = $false
-            if ($null -ne $input) { $summary.totals.input = [long]$summary.totals.input + $input; $added = $true }
-            if ($null -ne $output) { $summary.totals.output = [long]$summary.totals.output + $output; $added = $true }
-            if ($null -ne $cached) { $summary.totals.cached = [long]$summary.totals.cached + $cached; $added = $true }
-            if ($null -ne $cacheCreated) { $summary.totals.cacheCreated = [long]$summary.totals.cacheCreated + $cacheCreated; $added = $true }
-            if ($added) {
-                $summary.totals.total = [long]$summary.totals.total + [long]($input + $output + $cached + $cacheCreated)
-                $summary.totals.eventCount++
+            if ($null -eq $input -and $null -eq $output -and $null -eq $cached -and $null -eq $cacheCreated) { continue }
+
+            $messageId = [string](Get-AgentUsageProperty -Object $message -Name 'id')
+            if ([string]::IsNullOrWhiteSpace($messageId)) {
+                $anonymousIndex++
+                $messageKey = 'anonymous:{0}' -f $anonymousIndex
+            }
+            else {
+                $messageKey = 'message:{0}' -f $messageId
+            }
+            $stopReason = [string](Get-AgentUsageProperty -Object $message -Name 'stop_reason')
+            $candidate = [pscustomobject][ordered]@{
+                input = if ($null -ne $input) { [long]$input } else { [long]0 }
+                output = if ($null -ne $output) { [long]$output } else { [long]0 }
+                cached = if ($null -ne $cached) { [long]$cached } else { [long]0 }
+                cacheCreated = if ($null -ne $cacheCreated) { [long]$cacheCreated } else { [long]0 }
+                isFinal = -not [string]::IsNullOrWhiteSpace($stopReason)
+                timestamp = $timestamp
+            }
+            $existing = if ($snapshots.ContainsKey($messageKey)) { $snapshots[$messageKey] } else { $null }
+            $replace = $null -eq $existing
+            if (-not $replace -and $candidate.isFinal -and -not $existing.isFinal) {
+                $replace = $true
+            }
+            elseif (-not $replace -and $candidate.isFinal -eq $existing.isFinal) {
+                if ($candidate.output -gt $existing.output -or
+                    ($candidate.output -eq $existing.output -and $candidate.timestamp -gt $existing.timestamp)) {
+                    $replace = $true
+                }
+            }
+            if ($replace) {
+                $snapshots[$messageKey] = $candidate
             }
         }
         $reader.Dispose()
+        foreach ($snapshot in $snapshots.Values) {
+            $summary.totals.input += [long]$snapshot.input
+            $summary.totals.output += [long]$snapshot.output
+            $summary.totals.cached += [long]$snapshot.cached
+            $summary.totals.cacheCreated += [long]$snapshot.cacheCreated
+            $summary.totals.total += [long]$snapshot.input + [long]$snapshot.output + [long]$snapshot.cached + [long]$snapshot.cacheCreated
+            $summary.totals.eventCount++
+        }
         return $summary
     }
     catch {
@@ -228,11 +267,29 @@ function Merge-AgentUsageTotals {
     }
 }
 
+function Test-ClaudeCustomEndpointConfigured {
+    param([Parameter(Mandatory)][string]$SettingsPath)
+
+    if (-not (Test-Path -LiteralPath $SettingsPath -PathType Leaf)) { return $false }
+    try {
+        $settings = [System.IO.File]::ReadAllText($SettingsPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+        $envSettings = Get-AgentUsageProperty -Object $settings -Name 'env'
+        $baseUrl = [string](Get-AgentUsageProperty -Object $envSettings -Name 'ANTHROPIC_BASE_URL')
+        return -not [string]::IsNullOrWhiteSpace($baseUrl)
+    }
+    catch {
+        return $false
+    }
+}
+
 function Get-AgentUsageState {
     [CmdletBinding()]
     param(
         [string]$CodexSessionsRoot = (Join-Path (Join-Path $env:USERPROFILE '.codex') 'sessions'),
         [string]$ClaudeProjectsRoot = (Join-Path (Join-Path $env:USERPROFILE '.claude') 'projects'),
+        [string]$ClaudeSettingsPath = (Join-Path (Join-Path $env:USERPROFILE '.claude') 'settings.json'),
+        [string]$CCSwitchDatabasePath = (Join-Path (Join-Path $env:USERPROFILE '.cc-switch') 'cc-switch.db'),
+        [int]$CCSwitchCacheSeconds = 60,
         [DateTimeOffset]$Now = [DateTimeOffset]::Now
     )
 
@@ -268,27 +325,48 @@ function Get-AgentUsageState {
         }
     }
 
-    $claudeFiles = @()
-    if (Test-Path -LiteralPath $ClaudeProjectsRoot) {
-        $claudeFiles = @(Get-ChildItem -LiteralPath $ClaudeProjectsRoot -Recurse -Filter '*.jsonl' -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.LastWriteTime -ge $recentCutoff })
+    $usesCustomEndpoint = Test-ClaudeCustomEndpointConfigured -SettingsPath $ClaudeSettingsPath
+    $claudeSource = if ($usesCustomEndpoint) { 'transcript-estimate' } else { 'transcript-official' }
+    $claudeIsEstimate = $usesCustomEndpoint
+    $ccSwitchUsage = $null
+    if ($usesCustomEndpoint -and (Get-Command Get-CCSwitchClaudeUsage -ErrorAction SilentlyContinue)) {
+        try {
+            $dayStart = [DateTimeOffset]::new($today, [TimeZoneInfo]::Local.GetUtcOffset($today))
+            $dayEndDate = $today.AddDays(1)
+            $dayEnd = [DateTimeOffset]::new($dayEndDate, [TimeZoneInfo]::Local.GetUtcOffset($dayEndDate))
+            $ccSwitchUsage = Get-CCSwitchClaudeUsage -DatabasePath $CCSwitchDatabasePath -DayStart $dayStart -DayEnd $dayEnd -CacheSeconds $CCSwitchCacheSeconds
+        }
+        catch {}
     }
-    foreach ($file in $claudeFiles) {
-        $cacheKey = 'claude|' + $file.FullName.ToLowerInvariant()
-        $cached = if ($script:AgentUsageFileCache.ContainsKey($cacheKey)) { $script:AgentUsageFileCache[$cacheKey] } else { $null }
-        if ($null -ne $cached -and [string]$cached.day -eq $today.ToString('yyyy-MM-dd') -and [long]$cached.length -eq $file.Length -and [long]$cached.lastWriteTicks -eq $file.LastWriteTimeUtc.Ticks) {
-            $summary = $cached.summary
+
+    if ($null -ne $ccSwitchUsage) {
+        Merge-AgentUsageTotals -Target $claude.totals -Source $ccSwitchUsage.totals
+        $claudeSource = [string]$ccSwitchUsage.source
+        $claudeIsEstimate = [bool]$ccSwitchUsage.isEstimate
+    }
+    else {
+        $claudeFiles = @()
+        if (Test-Path -LiteralPath $ClaudeProjectsRoot) {
+            $claudeFiles = @(Get-ChildItem -LiteralPath $ClaudeProjectsRoot -Recurse -Filter '*.jsonl' -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -ge $recentCutoff })
         }
-        else {
-            $summary = Read-ClaudeUsageFileSummary -File $file -Today $today
-            $script:AgentUsageFileCache[$cacheKey] = [pscustomobject]@{
-                day = $today.ToString('yyyy-MM-dd')
-                length = $file.Length
-                lastWriteTicks = $file.LastWriteTimeUtc.Ticks
-                summary = $summary
+        foreach ($file in $claudeFiles) {
+            $cacheKey = 'claude|' + $file.FullName.ToLowerInvariant()
+            $cached = if ($script:AgentUsageFileCache.ContainsKey($cacheKey)) { $script:AgentUsageFileCache[$cacheKey] } else { $null }
+            if ($null -ne $cached -and [string]$cached.day -eq $today.ToString('yyyy-MM-dd') -and [long]$cached.length -eq $file.Length -and [long]$cached.lastWriteTicks -eq $file.LastWriteTimeUtc.Ticks) {
+                $summary = $cached.summary
             }
+            else {
+                $summary = Read-ClaudeUsageFileSummary -File $file -Today $today
+                $script:AgentUsageFileCache[$cacheKey] = [pscustomobject]@{
+                    day = $today.ToString('yyyy-MM-dd')
+                    length = $file.Length
+                    lastWriteTicks = $file.LastWriteTimeUtc.Ticks
+                    summary = $summary
+                }
+            }
+            Merge-AgentUsageTotals -Target $claude.totals -Source $summary.totals
         }
-        Merge-AgentUsageTotals -Target $claude.totals -Source $summary.totals
     }
 
     $codexCachePercent = $null
@@ -298,7 +376,7 @@ function Get-AgentUsageState {
     $claudeInputTotal = $claude.totals.input + $claude.totals.cached + $claude.totals.cacheCreated
     $claudeCachePercent = $null
     if ($claudeInputTotal -gt 0) {
-        $claudeCachePercent = [Math]::Min(100.0, [Math]::Max(0.0, (($claude.totals.cached + $claude.totals.cacheCreated) * 100.0 / $claudeInputTotal)))
+        $claudeCachePercent = [Math]::Min(100.0, [Math]::Max(0.0, ($claude.totals.cached * 100.0 / $claudeInputTotal)))
     }
 
     $weeklyRemaining = $null
@@ -320,6 +398,8 @@ function Get-AgentUsageState {
             weeklyRemainingPercent = $null
             weeklyResetAt = $null
             cachePercent = $claudeCachePercent
+            source = $claudeSource
+            isEstimate = $claudeIsEstimate
         }
     }
 }

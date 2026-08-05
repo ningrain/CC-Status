@@ -347,10 +347,17 @@ function Format-UsageTokens {
 }
 
 function Format-UsagePercent {
-    param([object]$Value)
+    param(
+        [object]$Value,
+        [int]$Decimals = 0
+    )
 
     if ($null -eq $Value) { return '-' }
-    try { return '{0:0}%' -f [double]$Value } catch { return '-' }
+    try {
+        if ($Decimals -gt 0) { return ('{0:0.' + (('0' * $Decimals) -join '') + '}%') -f [double]$Value }
+        return '{0:0}%' -f [double]$Value
+    }
+    catch { return '-' }
 }
 
 function Format-UsageResetTime {
@@ -371,12 +378,21 @@ function Set-UsageVisual {
     $claudeTokens = if ($null -ne $claude) { $claude.totalTokens } else { $null }
     $claudeCache = if ($null -ne $claude) { $claude.cachePercent } else { $null }
     $codexLine = 'Codex 余{0} 今{1} 缓{2}' -f (Format-UsagePercent $codexWeekly), (Format-UsageTokens $codexTokens), (Format-UsagePercent $codexCache)
-    $claudeLine = 'Claude 今{0} 缓{1}' -f (Format-UsageTokens $claudeTokens), (Format-UsagePercent $claudeCache)
+    $claudeLine = 'Claude 今{0} 缓{1}' -f (Format-UsageTokens $claudeTokens), (Format-UsagePercent -Value $claudeCache -Decimals 1)
     $codexUsageText.Text = $codexLine
     $claudeUsageText.Text = $claudeLine
     $codexReset = if ($script:codexWeeklyTriggered -and $null -ne $codex) { Format-UsageResetTime $codex.weeklyResetAt } else { '-' }
     $codexUsageText.ToolTip = "Codex：$codexLine；$codexReset"
-    $claudeUsageText.ToolTip = "Claude：$claudeLine；周限制 -"
+    $claudeSource = if ($null -ne $claude -and $null -ne $claude.PSObject.Properties['source']) { [string]$claude.source } else { '' }
+    $claudeSourceLabel = switch ($claudeSource) {
+        'cc-switch-proxy' { 'CC Switch 代理统计' }
+        'cc-switch-mixed' { 'CC Switch 汇总统计' }
+        'cc-switch-session-log' { 'CC Switch 日志统计' }
+        'transcript-official' { 'Claude 本地日志' }
+        'transcript-estimate' { 'Claude 日志估算' }
+        default { '暂无来源' }
+    }
+    $claudeUsageText.ToolTip = "Claude：$claudeLine；数据源 $claudeSourceLabel；周限制 -"
 }
 
 function Normalize-AgentSession {

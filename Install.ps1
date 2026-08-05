@@ -22,6 +22,7 @@ $claudeTurnWatcherPath = Join-Path $InstallRoot 'Watch-ClaudeTurn.ps1'
 $rolloutReaderPath = Join-Path $InstallRoot 'Get-CodexRolloutState.ps1'
 $approvalReaderPath = Join-Path $InstallRoot 'Get-CodexApprovalState.ps1'
 $usageReaderPath = Join-Path $InstallRoot 'Get-AgentUsageState.ps1'
+$ccSwitchUsageReaderPath = Join-Path $InstallRoot 'Get-CCSwitchUsage.ps1'
 $claudeTranscriptReaderPath = Join-Path $InstallRoot 'Get-ClaudeTranscriptState.ps1'
 $statusAppPath = Join-Path $InstallRoot 'CCStatus.ps1'
 $sourceIconPath = Join-Path $PSScriptRoot 'assets\CCStatus.ico'
@@ -29,7 +30,6 @@ $iconPath = Join-Path $InstallRoot 'CCStatus.ico'
 $uninstallerPath = Join-Path $InstallRoot 'Uninstall.ps1'
 $exitRequestPath = Join-Path $InstallRoot 'data\exit.request'
 $powershellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$backupRetentionDays = 30
 
 function Write-Step {
     param([string]$Message)
@@ -186,24 +186,6 @@ function Backup-Config {
     Copy-Item -LiteralPath $Path -Destination $backupPath
 }
 
-function Remove-ExpiredBackups {
-    param([Parameter(Mandatory)][string]$Directory)
-
-    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) { return }
-
-    $cutoff = (Get-Date).AddDays(-$backupRetentionDays)
-    $expired = @(Get-ChildItem -LiteralPath $Directory -File -Force -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.Name -match '^(hooks|settings)\.json\..+\.bak$' -and $_.LastWriteTime -lt $cutoff
-        })
-    foreach ($file in $expired) {
-        Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
-    }
-    if ($expired.Count -gt 0) {
-        Write-Host "[CC Status] 已清理 $($expired.Count) 个超过 $backupRetentionDays 天的配置备份。" -ForegroundColor DarkGray
-    }
-}
-
 function Read-JsonConfig {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -243,12 +225,13 @@ Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Watch-ClaudeTurn.ps1') -Destin
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Get-CodexRolloutState.ps1') -Destination $rolloutReaderPath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Get-CodexApprovalState.ps1') -Destination $approvalReaderPath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Get-AgentUsageState.ps1') -Destination $usageReaderPath -Force
+Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Get-CCSwitchUsage.ps1') -Destination $ccSwitchUsageReaderPath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Get-ClaudeTranscriptState.ps1') -Destination $claudeTranscriptReaderPath -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Uninstall.ps1') -Destination $uninstallerPath -Force
 if (Test-Path -LiteralPath $sourceIconPath) {
     Copy-Item -LiteralPath $sourceIconPath -Destination $iconPath -Force
 }
-foreach ($installedScript in @($statusAppPath, $agentBridgePath, $codexBridgePath, $claudeBridgePath, $claudePermissionWatcherPath, $claudeTurnWatcherPath, $rolloutReaderPath, $approvalReaderPath, $usageReaderPath, $claudeTranscriptReaderPath, $uninstallerPath)) {
+foreach ($installedScript in @($statusAppPath, $agentBridgePath, $codexBridgePath, $claudeBridgePath, $claudePermissionWatcherPath, $claudeTurnWatcherPath, $rolloutReaderPath, $approvalReaderPath, $usageReaderPath, $ccSwitchUsageReaderPath, $claudeTranscriptReaderPath, $uninstallerPath)) {
     Unblock-File -LiteralPath $installedScript -ErrorAction SilentlyContinue
 }
 
@@ -256,8 +239,6 @@ Write-Step '配置 Codex 生命周期 Hooks'
 if (-not (Test-Path -LiteralPath $CodexHome)) {
     $null = New-Item -ItemType Directory -Path $CodexHome -Force
 }
-Remove-ExpiredBackups -Directory $CodexHome
-
 if (Test-Path -LiteralPath $codexHooksPath) {
     $codexConfig = Read-JsonConfig -Path $codexHooksPath -Description 'hooks.json'
 Backup-Config -Path $codexHooksPath -Suffix 'cc-status'
@@ -293,8 +274,6 @@ else {
         if (-not (Test-Path -LiteralPath $ClaudeHome)) {
             $null = New-Item -ItemType Directory -Path $ClaudeHome -Force
         }
-        Remove-ExpiredBackups -Directory $ClaudeHome
-
         if (Test-Path -LiteralPath $claudeSettingsPath) {
             $claudeConfig = Read-JsonConfig -Path $claudeSettingsPath -Description 'Claude settings.json'
             Backup-Config -Path $claudeSettingsPath -Suffix 'cc-status'

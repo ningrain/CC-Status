@@ -54,6 +54,7 @@ foreach ($bridgeName in @(
     'Watch-ClaudePermission.ps1',
     'Watch-ClaudeTurn.ps1',
     'Get-AgentUsageState.ps1',
+    'Get-CCSwitchUsage.ps1',
     'Get-ClaudeTranscriptState.ps1'
 )) {
     $bridgePath = Join-Path $installRoot $bridgeName
