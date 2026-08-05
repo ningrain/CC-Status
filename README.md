@@ -7,9 +7,9 @@ Windows 桌面悬浮小组件，用颜色和提示音显示 Codex 与 Claude Cod
 - 蓝色：工作中
 - 橙色：需要批准
 - 绿色：已完成
-- 灰色：等待任务
+- 灰色：无任务
 
-CC Status 通过 Codex 与 Claude Code 的本地生命周期事件显示状态。它只保存任务来源、会话 ID、状态、时间和工作目录，不读取或保存提示词、命令内容或聊天文本。
+CC Status 通过 Codex 与 Claude Code 的本地生命周期事件显示状态。本地状态文件会记录提供方、模型、会话/任务 ID、状态、时间、工作目录和任务界面来源。为统计用量和识别 Claude 中断或权限结果，组件还会读取本地 rollout、transcript 及可用的 CC Switch 数据库，但不会展示、上传或持久保存提示词、命令内容和聊天正文。
 
 ## 安装
 
@@ -28,16 +28,16 @@ CC Status 通过 Codex 与 Claude Code 的本地生命周期事件显示状态�
 ## 使用
 
 - 拖动卡片可调整位置。
-- 右键托盘图标，在“主题”菜单中切换黑色或白色主题；选择会自动保存。
-- 双击卡片或点击操作按钮会按任务来源切换窗口：桌面任务打开 Codex，CLI 任务打开对应终端。
+- 点击组件右上角的太阳/月亮按钮可切换黑色或白色主题；右键托盘图标可显示或隐藏组件、切换保持置顶以及退出。主题、位置和置顶设置会自动保存。
+- 双击卡片或点击操作按钮会按任务来源切换窗口：桌面任务打开 Codex，CLI 任务优先激活已打开的终端；找不到终端时会在任务工作目录打开新终端。
 - 双击托盘里的图标可重新显示隐藏的小组件；关闭小组件窗口只会隐藏到托盘。
-- 只有托盘菜单的“退出”才会结束进程。
-- “已完成”显示 90 秒，随后恢复为灰色等待状态。
+- 可通过托盘菜单或开始菜单中的“退出 CC Status”结束组件进程，卸载时也会先停止组件。
+- “已完成”显示 90 秒，随后恢复为灰色“无任务”状态。
 - 多任务状态优先级为：需要批准 > 工作中 > 已完成。
 
 ### 用量信息
 
-组件右侧分别显示 Codex 和 Claude 的用量：`余` 表示 7 天限额剩余比例，`今` 表示本地当天 Token 用量，`缓` 表示缓存命中比例；无法取得的数据统一显示 `-`。Codex 当前可显示三项数据，Claude 暂无可用的 7 天限额数据，因此其 `余` 显示 `-`。
+组件右侧分别显示 Codex 和 Claude 的用量。Codex 行中的 `余` 表示 7 天限额剩余比例，`今` 表示本地当天 Token 用量，`缓` 表示缓存命中比例；Claude 行只显示 `今` 和 `缓`，因为当前无法取得 Claude 的 7 天限额。无法取得的数据统一显示 `-`。
 
 - Codex：读取 `%USERPROFILE%\.codex\sessions` 下的本地 rollout 记录。当天 Token 使用增量和缓存 Token 来自 `token_count` 事件；7 天剩余额度来自同一事件中 10080 分钟窗口的限额数据。
 - 官方 Claude：读取 `%USERPROFILE%\.claude\projects` 下的本地 transcript，按消息 ID 去重后统计当天输入、输出、缓存读取和缓存创建 Token。
@@ -51,7 +51,7 @@ Token 和缓存数据均来自本机记录，不调用 Codex 或 Claude 的账�
 
 ## 卸载
 
-使用开始菜单里的“卸载 CC Status”，或双击安装包中的 `Uninstall.cmd`。卸载程序会停止正在运行的组件，只删除本组件添加的 Hook、启动入口和安装目录，并在修改 Codex/Claude 配置前创建备份。安装和卸载均不会清理已有的 `hooks.json` / `settings.json` 备份。
+EXE 安装版可使用开始菜单里的“卸载 CC Status”或 Windows“已安装的应用”；ZIP 版可在解压目录中双击 `Uninstall.cmd`。卸载程序会停止正在运行的组件，只删除本组件添加的 Hook、快捷方式、启动入口和安装目录，并在修改 Codex/Claude 配置前创建备份。安装和卸载均不会清理已有的 `hooks.json` / `settings.json` 备份。
 
 ## 开发验证
 
@@ -61,6 +61,7 @@ Token 和缓存数据均来自本机记录，不调用 Codex 或 Claude 的账�
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-StatusBridge.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-RolloutMonitor.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-ApprovalMonitor.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-ClaudeTranscriptState.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-AgentUsage.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Installer.ps1
 ```
@@ -71,6 +72,6 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Installer.p
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\installer\Build-Installer.ps1
 ```
 
-构建脚本会清理 `D:\VibeCoding` 下旧版本的 CC Status 安装包、编译控制程序、生成 `D:\VibeCoding\CC-Status-Setup-1.0.0.exe`，并可静默安装验证文件、版本、Hooks、桌面快捷方式和进程。可用 `-SkipValidation` 跳过安装验证。安装包不再写入仓库目录。
+构建脚本会清理项目根目录上一级中的旧版本 CC Status 安装包、编译控制程序，并把 `CC-Status-Setup-1.0.0.exe` 生成到该目录。例如项目位于 `D:\VibeCoding\CC-Status` 时，安装包会输出到 `D:\VibeCoding\CC-Status-Setup-1.0.0.exe`。脚本还可静默安装并验证文件、版本、Hooks、桌面快捷方式和进程；可用 `-SkipValidation` 跳过安装验证。安装包不再写入仓库目录。
 
 状态主要来自 Codex 与 Claude Code 的任务提交、权限请求、工具执行、停止及会话结束事件。Claude 手动拒绝权限时，组件还会检查对应 transcript 的工具结果，避免状态卡在“需要批准”。
