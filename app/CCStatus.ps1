@@ -246,6 +246,7 @@ $script:currentOpenCwd = ''
 $script:currentOpenThreadId = ''
 $script:currentOpenProvider = 'codex'
 $script:currentTheme = 'dark'
+$script:codexWeeklyTriggered = $false
 
 function New-Brush {
     param([string]$Color)
@@ -364,7 +365,7 @@ function Set-UsageVisual {
 
     $codex = if ($null -ne $Usage -and $null -ne $Usage.PSObject.Properties['codex']) { $Usage.codex } else { $null }
     $claude = if ($null -ne $Usage -and $null -ne $Usage.PSObject.Properties['claude']) { $Usage.claude } else { $null }
-    $codexWeekly = if ($null -ne $codex) { $codex.weeklyRemainingPercent } else { $null }
+    $codexWeekly = if ($script:codexWeeklyTriggered -and $null -ne $codex) { $codex.weeklyRemainingPercent } else { $null }
     $codexTokens = if ($null -ne $codex) { $codex.totalTokens } else { $null }
     $codexCache = if ($null -ne $codex) { $codex.cachePercent } else { $null }
     $claudeTokens = if ($null -ne $claude) { $claude.totalTokens } else { $null }
@@ -373,7 +374,7 @@ function Set-UsageVisual {
     $claudeLine = 'Claude 今{0} 缓{1}' -f (Format-UsageTokens $claudeTokens), (Format-UsagePercent $claudeCache)
     $codexUsageText.Text = $codexLine
     $claudeUsageText.Text = $claudeLine
-    $codexReset = if ($null -ne $codex) { Format-UsageResetTime $codex.weeklyResetAt } else { '-' }
+    $codexReset = if ($script:codexWeeklyTriggered -and $null -ne $codex) { Format-UsageResetTime $codex.weeklyResetAt } else { '-' }
     $codexUsageText.ToolTip = "Codex：$codexLine；$codexReset"
     $claudeUsageText.ToolTip = "Claude：$claudeLine；周限制 -"
 }
@@ -534,7 +535,6 @@ function Update-StatusState {
     if (Get-Command Get-AgentUsageState -ErrorAction SilentlyContinue) {
         try { $usageState = Get-AgentUsageState } catch {}
     }
-    Set-UsageVisual -Usage $usageState
 
     $sessions = @()
     if (Test-Path -LiteralPath $statePath) {
@@ -620,6 +620,16 @@ function Update-StatusState {
         $script:currentOpenThreadId = ''
         Set-StatusVisual -State 'idle' -Sessions @()
     }
+
+    if (-not $script:codexWeeklyTriggered) {
+        foreach ($session in @($workingSessions) + @($approvalSessions)) {
+            if ((Get-AgentProvider -Session $session) -eq 'codex') {
+                $script:codexWeeklyTriggered = $true
+                break
+            }
+        }
+    }
+    Set-UsageVisual -Usage $usageState
 }
 
 function Save-StatusSettings {
