@@ -185,6 +185,7 @@ try {
     Assert-True ($statusSource -match 'if \(\$script:soundEnabled\) \{\s*if \(\$newState -eq ''approval''\)') 'CC Status sounds are not guarded by the sound setting.'
     Assert-True ($statusSource -match 'function Test-StatusPath') 'CC Status does not tolerate transient path access failures.'
     Assert-True ($statusSource -match 'function Invoke-ConfigurationMaintenance') 'CC Status does not monitor Claude configuration changes.'
+    Assert-True ($statusSource -match '\$script:claudeSettingsFingerprint = Get-StatusFileFingerprint -Path \$claudeSettingsPath\s*\$script:claudeSettingsChangedAt = \[DateTimeOffset\]::UtcNow') 'CC Status does not schedule a startup Hook verification after recording the configuration fingerprint.'
     Assert-True ($statusSource -match '\$timer\.add_Tick\(\{ Invoke-ConfigurationMaintenance; Invoke-StatusRefresh \}\)') 'CC Status timer does not maintain configuration before refreshing.'
     Assert-True ($statusSource -match 'Claude settings\.json changed during hook repair') 'CC Status hook repair does not guard against concurrent configuration writes.'
     Assert-True ($statusSource -match "Codex：周限制余\{0\}；今日用量\{1\}；缓存\{2\}；\{3\}") 'Codex usage tooltip does not use the explicit weekly-limit wording.'
