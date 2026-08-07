@@ -2,14 +2,14 @@
 tests/.test-*/
 
 # Local application runtime data
+app/data/settings.json
 app/data/*.log
 app/data/*.pid
 app/data/state.json
 app/data/*.request
 
 # Generated installer build artifacts
-installer/build/*.exe
-installer/build/*.log
+installer/build/*
 
 # Temporary distribution output
 dist/*
