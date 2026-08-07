@@ -289,7 +289,7 @@ function Get-AgentUsageState {
         [string]$ClaudeProjectsRoot = (Join-Path (Join-Path $env:USERPROFILE '.claude') 'projects'),
         [string]$ClaudeSettingsPath = (Join-Path (Join-Path $env:USERPROFILE '.claude') 'settings.json'),
         [string]$CCSwitchDatabasePath = (Join-Path (Join-Path $env:USERPROFILE '.cc-switch') 'cc-switch.db'),
-        [int]$CCSwitchCacheSeconds = 60,
+        [int]$CCSwitchCacheSeconds = 30,
         [DateTimeOffset]$Now = [DateTimeOffset]::Now
     )
 

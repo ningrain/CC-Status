@@ -45,7 +45,7 @@ CC Status 通过 Codex 与 Claude Code 的本地生命周期事件显示状态�
 
 - Codex：读取 `%USERPROFILE%\.codex\sessions` 下的本地 rollout 记录。当天 Token 使用增量和缓存 Token 来自 `token_count` 事件；7 天剩余额度来自同一事件中 10080 分钟窗口的限额数据。
 - 官方 Claude：读取 `%USERPROFILE%\.claude\projects` 下的本地 transcript，按消息 ID 去重后统计当天输入、输出、缓存读取和缓存创建 Token。
-- CC Switch 管理的 Claude 自定义接入：只读查询 `%USERPROFILE%\.cc-switch\cc-switch.db` 中当天成功请求的用量记录，汇总 proxy 与 session log 数据；查询结果缓存 60 秒，避免频繁访问数据库。数据库不可用时回退到本地 transcript 估算。
+- CC Switch 管理的 Claude 自定义接入：只读查询 `%USERPROFILE%\.cc-switch\cc-switch.db` 中当天成功请求的用量记录，汇总 proxy 与 session log 数据；查询结果缓存 30 秒，避免频繁访问数据库。数据库不可用时回退到本地 transcript 估算。CC Switch 改写 Claude 配置后，CC Status 会自动补回缺失的状态 Hooks，无需重启。
 
 Token 和缓存数据均来自本机记录，不调用 Codex 或 Claude 的账户计费接口。由于日志缺失、跨设备使用或第三方转发记录方式不同，显示值可能与服务商账户后台存在差异。
 
