@@ -84,6 +84,7 @@ $settingsPath = Join-Path $dataRoot 'settings.json'
 $exitRequestPath = Join-Path $dataRoot 'exit.request'
 $showRequestPath = Join-Path $dataRoot 'show.request'
 $pidPath = Join-Path $dataRoot 'status.pid'
+$diagnosticLogPath = Join-Path $dataRoot 'diagnostic.log'
 $rolloutReaderPath = Join-Path $appRoot 'Get-CodexRolloutState.ps1'
 $approvalReaderPath = Join-Path $appRoot 'Get-CodexApprovalState.ps1'
 $usageReaderPath = Join-Path $appRoot 'Get-AgentUsageState.ps1'
@@ -104,6 +105,30 @@ if (Test-Path -LiteralPath $claudeTranscriptReaderPath) {
 
 if (-not (Test-Path -LiteralPath $dataRoot)) {
     $null = New-Item -ItemType Directory -Path $dataRoot -Force
+}
+
+function Write-StatusDiagnostic {
+    param([Parameter(Mandatory)][string]$Message)
+
+    try {
+        $line = '{0} {1}{2}' -f [DateTimeOffset]::UtcNow.ToString('o'), $Message, [Environment]::NewLine
+        [System.IO.File]::AppendAllText($diagnosticLogPath, $line, [System.Text.UTF8Encoding]::new($false))
+    }
+    catch {
+        # Diagnostics must never terminate the widget.
+    }
+}
+
+function Test-StatusPath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    try {
+        return Test-Path -LiteralPath $Path -ErrorAction Stop
+    }
+    catch {
+        Write-StatusDiagnostic -Message ("path check failed: {0}; {1}" -f $Path, $_.Exception.Message)
+        return $false
+    }
 }
 
 $createdNew = $false
@@ -533,12 +558,12 @@ function Set-StatusVisual {
 }
 
 function Update-StatusState {
-    if (Test-Path -LiteralPath $exitRequestPath) {
+    if (Test-StatusPath -Path $exitRequestPath) {
         $script:isExiting = $true
         $window.Close()
         return
     }
-    if (Test-Path -LiteralPath $showRequestPath) {
+    if (Test-StatusPath -Path $showRequestPath) {
         Remove-Item -LiteralPath $showRequestPath -Force -ErrorAction SilentlyContinue
         if (-not $window.IsVisible) { $window.Show() }
         $window.Activate()
@@ -550,7 +575,7 @@ function Update-StatusState {
     }
 
     $sessions = @()
-    if (Test-Path -LiteralPath $statePath) {
+    if (Test-StatusPath -Path $statePath) {
         try {
             $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
             $sessions = @($state.sessions)
@@ -643,6 +668,15 @@ function Update-StatusState {
         }
     }
     Set-UsageVisual -Usage $usageState
+}
+
+function Invoke-StatusRefresh {
+    try {
+        Update-StatusState
+    }
+    catch {
+        Write-StatusDiagnostic -Message ("status refresh failed: {0}" -f $_.Exception.ToString())
+    }
 }
 
 function Save-StatusSettings {
@@ -1074,7 +1108,7 @@ $closeButton.add_Click({
 
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(850)
-$timer.add_Tick({ Update-StatusState })
+$timer.add_Tick({ Invoke-StatusRefresh })
 
 $window.add_SourceInitialized({ Restore-StatusSettings })
 $window.add_Closing({
@@ -1112,10 +1146,18 @@ $window.add_Closed({
 })
 
 Repair-StatusHooks
-Update-StatusState
+Invoke-StatusRefresh
 $timer.Start()
-$window.Show()
-[System.Windows.Threading.Dispatcher]::Run()
-
-try { $singleInstance.ReleaseMutex() } catch {}
-$singleInstance.Dispose()
+if (-not $window.IsVisible) { $window.Show() }
+try {
+    [System.Windows.Threading.Dispatcher]::Run()
+}
+catch {
+    Write-StatusDiagnostic -Message ("dispatcher failed: {0}" -f $_.Exception.ToString())
+    throw
+}
+finally {
+    Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
+    try { $singleInstance.ReleaseMutex() } catch {}
+    $singleInstance.Dispose()
+}
