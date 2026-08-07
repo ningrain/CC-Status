@@ -12,6 +12,7 @@ $tests = @(
     'Test-ApprovalMonitor.ps1',
     'Test-ClaudeTranscriptState.ps1',
     'Test-AgentUsage.ps1',
+    'Test-ConfigurationMaintenance.ps1',
     'Test-Installer.ps1'
 )
 

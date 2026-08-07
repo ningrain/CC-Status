@@ -87,8 +87,8 @@ try {
     }
     $dayStart = [DateTimeOffset]::Parse('2026-08-04T00:00:00+08:00')
     $dayEnd = $dayStart.AddDays(1)
-    $firstCCSwitch = Get-CCSwitchClaudeUsage -DatabasePath $ccSwitchDatabaseFile -DayStart $dayStart -DayEnd $dayEnd -CacheSeconds 60
-    $secondCCSwitch = Get-CCSwitchClaudeUsage -DatabasePath $ccSwitchDatabaseFile -DayStart $dayStart -DayEnd $dayEnd -CacheSeconds 60
+    $firstCCSwitch = Get-CCSwitchClaudeUsage -DatabasePath $ccSwitchDatabaseFile -DayStart $dayStart -DayEnd $dayEnd -CacheSeconds 30
+    $secondCCSwitch = Get-CCSwitchClaudeUsage -DatabasePath $ccSwitchDatabaseFile -DayStart $dayStart -DayEnd $dayEnd -CacheSeconds 30
     Assert-Equal $script:CCSwitchReadCount 1 'CC Switch usage should be queried at most once during the cache interval.'
     Assert-Equal $firstCCSwitch.totals.total 1490 'CC Switch usage should combine all data sources using the UI aggregation scope.'
     Assert-Equal $secondCCSwitch.totals.total 1490 'Cached CC Switch usage should match the first query.'
