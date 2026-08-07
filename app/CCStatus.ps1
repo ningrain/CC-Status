@@ -89,6 +89,7 @@ $rolloutReaderPath = Join-Path $appRoot 'Get-CodexRolloutState.ps1'
 $approvalReaderPath = Join-Path $appRoot 'Get-CodexApprovalState.ps1'
 $usageReaderPath = Join-Path $appRoot 'Get-AgentUsageState.ps1'
 $claudeTranscriptReaderPath = Join-Path $appRoot 'Get-ClaudeTranscriptState.ps1'
+$claudeSettingsPath = Join-Path $env:USERPROFILE '.claude\settings.json'
 
 if (Test-Path -LiteralPath $rolloutReaderPath) {
     . $rolloutReaderPath
@@ -207,6 +208,23 @@ $xaml = @"
                 </Button>
             </Grid>
         </Border>
+        <Button x:Name="SoundButton" Content="🔔" ToolTip="提示音已开启（点击关闭）" Width="22" Height="22"
+                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,8,60,0"
+                Background="Transparent" Foreground="#F0F0F0" BorderThickness="0"
+                FontFamily="Segoe UI Symbol" FontSize="13" Cursor="Hand">
+            <Button.Template>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="SoundButtonBorder" Background="{TemplateBinding Background}" CornerRadius="7">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="SoundButtonBorder" Property="Background" Value="#8890A0B0" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Button.Template>
+        </Button>
         <Button x:Name="ThemeButton" Content="☾" ToolTip="黑色主题（点击切换为白色）" Width="22" Height="22"
                 HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,8,34,0"
                 Background="Transparent" Foreground="#F0F0F0" BorderThickness="0"
@@ -259,6 +277,7 @@ $codexUsageText = $window.FindName('CodexUsageText')
 $claudeUsageText = $window.FindName('ClaudeUsageText')
 $detailText = $window.FindName('DetailText')
 $openButton = $window.FindName('OpenButton')
+$soundButton = $window.FindName('SoundButton')
 $themeButton = $window.FindName('ThemeButton')
 $closeButton = $window.FindName('CloseButton')
 
@@ -271,6 +290,7 @@ $script:currentOpenCwd = ''
 $script:currentOpenThreadId = ''
 $script:currentOpenProvider = 'codex'
 $script:currentTheme = 'dark'
+$script:soundEnabled = $true
 $script:codexWeeklyTriggered = $false
 
 function New-Brush {
@@ -335,6 +355,7 @@ function Apply-Theme {
         $detailText.Foreground = New-Brush '#5B6675'
         $openButton.Foreground = New-Brush '#8A5800'
         $openButton.Background = New-Brush '#FFFFFFFF'
+        $soundButton.Foreground = New-Brush '#9A6700'
         $themeButton.Foreground = New-Brush '#9A6700'
         $closeButton.Foreground = New-Brush '#334155'
     }
@@ -350,12 +371,18 @@ function Apply-Theme {
         $detailText.Foreground = New-Brush '#BBC5D1'
         $openButton.Foreground = New-Brush '#FFD9A0'
         $openButton.Background = New-Brush '#121212'
+        $soundButton.Foreground = New-Brush '#F0F0F0'
         $themeButton.Foreground = New-Brush '#F0F0F0'
         $closeButton.Foreground = New-Brush '#F0F0F0'
     }
 
     $themeButton.Content = if ($Theme -eq 'dark') { '☾' } else { '☀' }
     $themeButton.ToolTip = if ($Theme -eq 'dark') { '黑色主题（点击切换为白色）' } else { '白色主题（点击切换为黑色）' }
+}
+
+function Update-SoundButton {
+    $soundButton.Content = if ($script:soundEnabled) { '🔔' } else { '🔕' }
+    $soundButton.ToolTip = if ($script:soundEnabled) { '提示音已开启（点击关闭）' } else { '提示音已关闭（点击开启）' }
 }
 
 function Format-UsageTokens {
@@ -407,7 +434,8 @@ function Set-UsageVisual {
     $codexUsageText.Text = $codexLine
     $claudeUsageText.Text = $claudeLine
     $codexReset = if ($script:codexWeeklyTriggered -and $null -ne $codex) { Format-UsageResetTime $codex.weeklyResetAt } else { '-' }
-    $codexUsageText.ToolTip = "Codex：$codexLine；$codexReset"
+    $codexUsageText.ToolTip = 'Codex：周限制余{0}；今日用量{1}；缓存{2}；{3}' -f `
+        (Format-UsagePercent $codexWeekly), (Format-UsageTokens $codexTokens), (Format-UsagePercent $codexCache), $codexReset
     $claudeSource = if ($null -ne $claude -and $null -ne $claude.PSObject.Properties['source']) { [string]$claude.source } else { '' }
     $claudeSourceLabel = switch ($claudeSource) {
         'cc-switch-proxy' { 'CC Switch 代理统计' }
@@ -417,7 +445,8 @@ function Set-UsageVisual {
         'transcript-estimate' { 'Claude 日志估算' }
         default { '暂无来源' }
     }
-    $claudeUsageText.ToolTip = "Claude：$claudeLine；数据源 $claudeSourceLabel；周限制 -"
+    $claudeUsageText.ToolTip = 'Claude：今日用量{0}；缓存{1}；数据源 {2}' -f `
+        (Format-UsageTokens $claudeTokens), (Format-UsagePercent -Value $claudeCache -Decimals 1), $claudeSourceLabel
 }
 
 function Normalize-AgentSession {
@@ -540,11 +569,13 @@ function Set-StatusVisual {
     }
 
     if ($script:lastAggregateState -ne $newState) {
-        if ($newState -eq 'approval') {
-            [System.Media.SystemSounds]::Exclamation.Play()
-        }
-        elseif ($newState -eq 'completed') {
-            [System.Media.SystemSounds]::Asterisk.Play()
+        if ($script:soundEnabled) {
+            if ($newState -eq 'approval') {
+                [System.Media.SystemSounds]::Exclamation.Play()
+            }
+            elseif ($newState -eq 'completed') {
+                [System.Media.SystemSounds]::Asterisk.Play()
+            }
         }
         $script:lastAggregateState = $newState
     }
@@ -686,6 +717,7 @@ function Save-StatusSettings {
             top = [Math]::Round($window.Top, 2)
             topmost = [bool]$script:topmostEnabled
             theme = $script:currentTheme
+            soundEnabled = [bool]$script:soundEnabled
         }
         [System.IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false))
     }
@@ -714,9 +746,13 @@ function Restore-StatusSettings {
                 if ($savedTheme -eq 'light') { Apply-Theme -Theme 'light' }
                 else { Apply-Theme -Theme 'dark' }
             }
+            if ($null -ne $settings.PSObject.Properties['soundEnabled']) {
+                $script:soundEnabled = [bool]$settings.soundEnabled
+            }
         }
         catch {}
     }
+    Update-SoundButton
 }
 
 function Invoke-ThreadDeepLink {
@@ -973,13 +1009,27 @@ function Write-RepairLog {
     catch {}
 }
 
+function Get-StatusFileFingerprint {
+    param([Parameter(Mandatory)][string]$Path)
+
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return 'missing' }
+        $file = Get-Item -LiteralPath $Path -ErrorAction Stop
+        return '{0}:{1}' -f $file.Length, $file.LastWriteTimeUtc.Ticks
+    }
+    catch {
+        return $null
+    }
+}
+
 function Repair-StatusHooks {
     $claudeBridgePath = Join-Path $appRoot 'Write-ClaudeStatus.ps1'
     $codexBridgePath = Join-Path $appRoot 'Write-Codex.ps1'
 
+    $claudeRepairSucceeded = $true
     if (Test-Path -LiteralPath $claudeBridgePath) {
         try {
-            $claudeSettingsPath = Join-Path $env:USERPROFILE '.claude\settings.json'
+            $sourceFingerprint = Get-StatusFileFingerprint -Path $claudeSettingsPath
             $config = [pscustomobject][ordered]@{}
             if (Test-Path -LiteralPath $claudeSettingsPath) {
                 $config = [System.IO.File]::ReadAllText($claudeSettingsPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
@@ -1004,11 +1054,15 @@ function Repair-StatusHooks {
             }
 
             if ($changed) {
+                if ((Get-StatusFileFingerprint -Path $claudeSettingsPath) -ne $sourceFingerprint) {
+                    throw 'Claude settings.json changed during hook repair.'
+                }
                 Save-ConfigAtomic -Value $config -Path $claudeSettingsPath
                 Write-RepairLog "claude hooks restored: $claudeSettingsPath"
             }
         }
         catch {
+            $claudeRepairSucceeded = $false
             Write-RepairLog ('claude hooks repair failed: ' + $_.Exception.Message)
         }
     }
@@ -1046,6 +1100,38 @@ function Repair-StatusHooks {
             Write-RepairLog ('codex hooks repair failed: ' + $_.Exception.Message)
         }
     }
+    return $claudeRepairSucceeded
+}
+
+$script:claudeSettingsFingerprint = $null
+$script:claudeSettingsChangedAt = $null
+$script:nextConfigurationCheckAt = [DateTimeOffset]::MinValue
+
+function Invoke-ConfigurationMaintenance {
+    $now = [DateTimeOffset]::UtcNow
+    if ($now -lt $script:nextConfigurationCheckAt) { return }
+    $script:nextConfigurationCheckAt = $now.AddSeconds(1)
+
+    $fingerprint = Get-StatusFileFingerprint -Path $claudeSettingsPath
+    if ($null -eq $fingerprint) { return }
+    if ($null -eq $script:claudeSettingsFingerprint) {
+        $script:claudeSettingsFingerprint = $fingerprint
+        return
+    }
+    if ($fingerprint -ne $script:claudeSettingsFingerprint) {
+        $script:claudeSettingsFingerprint = $fingerprint
+        $script:claudeSettingsChangedAt = $now
+        return
+    }
+    if ($null -eq $script:claudeSettingsChangedAt -or ($now - $script:claudeSettingsChangedAt).TotalSeconds -lt 2) { return }
+
+    if (Repair-StatusHooks) {
+        $script:claudeSettingsFingerprint = Get-StatusFileFingerprint -Path $claudeSettingsPath
+        $script:claudeSettingsChangedAt = $null
+    }
+    else {
+        $script:claudeSettingsChangedAt = $now
+    }
 }
 
 $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
@@ -1075,6 +1161,11 @@ $showMenuItem.add_Click({
 $themeButton.add_Click({
     $nextTheme = if ($script:currentTheme -eq 'dark') { 'light' } else { 'dark' }
     Apply-Theme -Theme $nextTheme
+    Save-StatusSettings
+})
+$soundButton.add_Click({
+    $script:soundEnabled = -not $script:soundEnabled
+    Update-SoundButton
     Save-StatusSettings
 })
 $topmostMenuItem.add_Click({
@@ -1108,7 +1199,7 @@ $closeButton.add_Click({
 
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(850)
-$timer.add_Tick({ Invoke-StatusRefresh })
+$timer.add_Tick({ Invoke-ConfigurationMaintenance; Invoke-StatusRefresh })
 
 $window.add_SourceInitialized({ Restore-StatusSettings })
 $window.add_Closing({
@@ -1145,7 +1236,8 @@ $window.add_Closed({
     $window.Dispatcher.InvokeShutdown()
 })
 
-Repair-StatusHooks
+$null = Repair-StatusHooks
+$script:claudeSettingsFingerprint = Get-StatusFileFingerprint -Path $claudeSettingsPath
 Invoke-StatusRefresh
 $timer.Start()
 if (-not $window.IsVisible) { $window.Show() }

@@ -207,7 +207,7 @@ function Get-CCSwitchClaudeUsage {
         [string]$DatabasePath = (Join-Path (Join-Path $env:USERPROFILE '.cc-switch') 'cc-switch.db'),
         [Parameter(Mandatory)][DateTimeOffset]$DayStart,
         [Parameter(Mandatory)][DateTimeOffset]$DayEnd,
-        [int]$CacheSeconds = 60
+        [int]$CacheSeconds = 30
     )
 
     if (-not (Test-Path -LiteralPath $DatabasePath -PathType Leaf)) { return $null }
