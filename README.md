@@ -2,7 +2,11 @@
 
 Windows 桌面悬浮小组件，用颜色和提示音显示 Codex 与 Claude Code CLI 的当前状态。
 
-![CC Status 效果预览](docs/preview.png)
+| 工作中 | 需要批准 |
+|:---:|:---:|
+| ![CC Status 工作中状态](docs/preview-working.png) | ![CC Status 需要批准状态](docs/preview-approval.png) |
+| 已完成 | 无任务 |
+| ![CC Status 已完成状态](docs/preview-completed.png) | ![CC Status 无任务状态](docs/preview-idle.png) |
 
 - 蓝色：工作中
 - 橙色：需要批准
@@ -13,7 +17,7 @@ CC Status 通过 Codex 与 Claude Code 的本地生命周期事件显示状态�
 
 ## 安装
 
-推荐直接运行 `CC-Status-Setup-1.0.0.exe`。安装后，桌面会创建“CC Status”快捷方式，开始菜单提供打开、退出和卸载入口。
+推荐直接使用exe安装。安装后，桌面会创建“CC Status”快捷方式，开始菜单提供打开、退出和卸载入口。
 
 也可以使用 ZIP 版：
 

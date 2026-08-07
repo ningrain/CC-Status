@@ -160,6 +160,10 @@ try {
     Assert-True (($statusSource -match "'☾'") -and ($statusSource -match "'☀'")) 'Theme button does not use moon and sun icons.'
     Assert-True (-not ($statusSource -match 'themeMenuItem')) 'Theme switching is still exposed from the tray menu.'
     Assert-True ($statusSource -match 'theme = \$script:currentTheme') 'CC Status does not persist the selected theme.'
+    Assert-True ($statusSource -match 'function Test-StatusPath') 'CC Status does not tolerate transient path access failures.'
+    Assert-True ($statusSource -match '\$timer\.add_Tick\(\{ Invoke-StatusRefresh \}\)') 'CC Status timer does not isolate refresh failures.'
+    Assert-True ($statusSource -match 'if \(-not \$window\.IsVisible\) \{ \$window\.Show\(\) \}\s*try \{\s*\[System\.Windows\.Threading\.Dispatcher\]::Run\(\)') 'CC Status startup can still show an already-visible window.'
+    Assert-True ($statusSource -match 'dispatcher failed:') 'CC Status does not record fatal dispatcher failures.'
     Assert-True ($packageSource -match 'OutputDir=\.\.\\\.\.') 'Installer output is not configured for the project parent directory.'
     Assert-True ($packageSource -match 'Excludes:\s*"data\\\*"') 'Installer package does not exclude local runtime data.'
 
