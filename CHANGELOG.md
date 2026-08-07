@@ -6,6 +6,20 @@
 
 ### 新增
 
+- 暂无。
+
+### 变更
+
+- 暂无。
+
+### 修复
+
+- 暂无。
+
+## [1.1.0] - 2026-08-08
+
+### 新增
+
 - CC Switch 改写 Claude 配置后自动补回缺失的状态 Hooks，无需重启 CC Status。
 - 右上角增加提示音开关，并持久化开启或关闭状态。
 
@@ -39,5 +53,6 @@
 - 修复瞬时文件访问失败可能导致组件退出的问题。
 - 修复运行中卸载后进程或托盘图标残留的问题。
 
-[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/ningrain/CC-Status/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ningrain/CC-Status/releases/tag/v1.0.0
