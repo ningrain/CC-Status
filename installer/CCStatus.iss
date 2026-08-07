@@ -1,5 +1,10 @@
 #define MyAppName "CC Status"
-#define MyAppVersion "1.0.0"
+#ifndef MyAppVersion
+  #error MyAppVersion must be supplied by Build-Installer.ps1
+#endif
+#ifndef MyVersionInfoVersion
+  #error MyVersionInfoVersion must be supplied by Build-Installer.ps1
+#endif
 #define MyAppPublisher "Local Codex Tools"
 #define MyAppExeName "CCStatusControl.exe"
 
@@ -8,7 +13,7 @@ AppId={{B2164CC1-52ED-4B5F-907B-BA6994282155}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-VersionInfoVersion=1.0.0.0
+VersionInfoVersion={#MyVersionInfoVersion}
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} Setup
 VersionInfoProductName={#MyAppName}
@@ -33,6 +38,7 @@ UsePreviousAppDir=no
 
 [Files]
 Source: "build\CCStatusControl.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\VERSION"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\assets\CCStatus.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app\*"; DestDir: "{tmp}\CCStatusPayload\app"; Excludes: "data\*"; Flags: recursesubdirs createallsubdirs deleteafterinstall
 Source: "..\Install.ps1"; DestDir: "{tmp}\CCStatusPayload"; Flags: deleteafterinstall
