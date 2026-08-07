@@ -11,6 +11,7 @@ $installRoot = Join-Path $env:LOCALAPPDATA 'CC Status'
 $controlExe = Join-Path $installRoot 'CCStatusControl.exe'
 $statusAppPs1 = Join-Path $installRoot 'CCStatus.ps1'
 $installedVersionPath = Join-Path $installRoot 'VERSION'
+$settingsPath = Join-Path $installRoot 'data\settings.json'
 $pidFile = Join-Path $installRoot 'data\status.pid'
 $hooksPath = Join-Path $env:USERPROFILE '.codex\hooks.json'
 $claudeSettingsPath = Join-Path $env:USERPROFILE '.claude\settings.json'
@@ -33,6 +34,11 @@ function Write-Fail {
 if (-not (Test-Path -LiteralPath $PackagePath)) {
     Write-Fail "安装包不存在：$PackagePath"
 }
+
+$settingsHashBefore = if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
+    (Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash
+}
+else { $null }
 
 $existingStatusProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
     $_.CommandLine -match '(?i)CCStatus\.ps1'
@@ -62,6 +68,15 @@ if (-not (Test-Path -LiteralPath $installedVersionPath)) {
 $installedVersion = ([System.IO.File]::ReadAllText($installedVersionPath, [System.Text.UTF8Encoding]::new($false))).Trim()
 if ($installedVersion -ne $ExpectedVersion) {
     Write-Fail "安装版本异常：$installedVersion（期望 $ExpectedVersion）"
+}
+if ($null -ne $settingsHashBefore) {
+    if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) {
+        Write-Fail "覆盖安装删除了用户设置：$settingsPath"
+    }
+    $settingsHashAfter = (Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash
+    if ($settingsHashAfter -ne $settingsHashBefore) {
+        Write-Fail "覆盖安装修改了用户设置：$settingsPath"
+    }
 }
 foreach ($bridgeName in @(
     'Write-AgentStatus.ps1',
