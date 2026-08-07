@@ -22,6 +22,7 @@ $buildSource = Get-Content -LiteralPath (Join-Path $projectRoot 'installer\Build
 $validatorSource = Get-Content -LiteralPath (Join-Path $projectRoot 'installer\Validate-Package.ps1') -Raw
 $readme = Get-Content -LiteralPath (Join-Path $projectRoot 'README.md') -Raw
 $changelog = Get-Content -LiteralPath (Join-Path $projectRoot 'CHANGELOG.md') -Raw
+$releaseWorkflow = Get-Content -LiteralPath (Join-Path $projectRoot '.github\workflows\release.yml') -Raw
 
 Assert-True (-not ($definition -match '#define\s+MyAppVersion\s+"')) 'CCStatus.iss still hard-codes MyAppVersion.'
 Assert-True ($definition -match 'MyAppVersion must be supplied by Build-Installer\.ps1') 'CCStatus.iss does not require the centralized version.'
@@ -33,6 +34,8 @@ Assert-True ($validatorSource -match '\$ExpectedVersion') 'Validate-Package.ps1 
 Assert-True (-not ($validatorSource -match "-ne\s+'\d+\.\d+\.\d+\.\d+'")) 'Validate-Package.ps1 still hard-codes a file version.'
 Assert-True (-not ($readme -match 'CC-Status-Setup-\d+\.\d+\.\d+\.exe')) 'README still hard-codes an installer version.'
 Assert-True ($changelog -match ('(?m)^## \[' + [regex]::Escape($version) + '\]')) "CHANGELOG.md has no section for $version."
+Assert-True ($releaseWorkflow -match 'ReadAllLines\([\s\S]*UTF8Encoding') 'Release workflow does not read CHANGELOG.md explicitly as UTF-8.'
+Assert-True (-not ($releaseWorkflow -match '\$changelog\s*=\s*@\(Get-Content')) 'Release workflow still relies on the Windows PowerShell default file encoding.'
 
 $parseErrors = @()
 foreach ($scriptPath in @(Get-ChildItem -LiteralPath $projectRoot -Recurse -Filter '*.ps1' -File | Where-Object {
