@@ -35,19 +35,19 @@ $null = New-Item -ItemType Directory -Path $claudeRoot -Force
 try {
     $codexLines = @(
         '{"timestamp":"2026-08-03T15:59:59Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":999,"input_tokens":900,"output_tokens":99,"cached_input_tokens":600}}}}',
-        '{"timestamp":"2026-08-04T01:00:00+08:00","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":1000,"input_tokens":900,"output_tokens":100,"cached_input_tokens":600}},"rate_limits":{"primary":{"window_minutes":10080,"used_percent":33,"resets_at":1786198904}}}}',
-        '{"timestamp":"2026-08-04T02:00:00+08:00","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":2500,"input_tokens":2000,"output_tokens":500,"cached_input_tokens":1500,"cache_write_input_tokens":50}},"rate_limits":{"primary":{"window_minutes":10080,"used_percent":33,"resets_at":1786198904}}}}'
+        '{"timestamp":"2026-08-04T09:00:00+08:00","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":1000,"input_tokens":900,"output_tokens":100,"cached_input_tokens":600}},"rate_limits":{"primary":{"window_minutes":10080,"used_percent":33,"resets_at":1786198904}}}}',
+        '{"timestamp":"2026-08-04T10:00:00+08:00","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":2500,"input_tokens":2000,"output_tokens":500,"cached_input_tokens":1500,"cache_write_input_tokens":50}},"rate_limits":{"primary":{"window_minutes":10080,"used_percent":33,"resets_at":1786198904}}}}'
     )
     [System.IO.File]::WriteAllLines($codexFile, $codexLines, [System.Text.UTF8Encoding]::new($false))
 
     $claudeLines = @(
         '{"timestamp":"2026-08-03T15:59:59Z","type":"assistant","message":{"id":"outside-day","model":"test-model","stop_reason":"end_turn","usage":{"input_tokens":999,"output_tokens":99,"cache_read_input_tokens":500,"cache_creation_input_tokens":100}}}',
-        '{"timestamp":"2026-08-04T03:00:00+08:00","type":"assistant","message":{"id":"message-a","model":"test-model-a","stop_reason":null,"usage":{"input_tokens":1000,"output_tokens":300,"cache_read_input_tokens":300,"cache_creation_input_tokens":200}}}',
-        '{"timestamp":"2026-08-04T03:00:01+08:00","type":"assistant","message":{"id":"message-a","model":"test-model-a","stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":100,"cache_read_input_tokens":300,"cache_creation_input_tokens":200}}}',
-        '{"timestamp":"2026-08-04T04:00:00+08:00","type":"assistant","message":{"id":"message-b","model":"test-model-b","stop_reason":null,"usage":{"input_tokens":2000,"output_tokens":200,"cache_read_input_tokens":500,"cache_creation_input_tokens":0}}}',
-        '{"timestamp":"2026-08-04T04:00:01+08:00","type":"assistant","message":{"id":"message-b","model":"test-model-b","stop_reason":"end_turn","usage":{"input_tokens":2000,"output_tokens":500,"cache_read_input_tokens":500,"cache_creation_input_tokens":0}}}',
-        '{"timestamp":"2026-08-04T05:00:00+08:00","type":"assistant","message":{"id":"message-c","model":"test-model-c","stop_reason":null,"usage":{"input_tokens":400,"output_tokens":50,"cache_read_input_tokens":100,"cache_creation_input_tokens":50}}}',
-        '{"timestamp":"2026-08-04T05:00:01+08:00","type":"assistant","message":{"id":"message-c","model":"test-model-c","stop_reason":null,"usage":{"input_tokens":400,"output_tokens":150,"cache_read_input_tokens":100,"cache_creation_input_tokens":50}}}'
+        '{"timestamp":"2026-08-04T11:00:00+08:00","type":"assistant","message":{"id":"message-a","model":"test-model-a","stop_reason":null,"usage":{"input_tokens":1000,"output_tokens":300,"cache_read_input_tokens":300,"cache_creation_input_tokens":200}}}',
+        '{"timestamp":"2026-08-04T11:00:01+08:00","type":"assistant","message":{"id":"message-a","model":"test-model-a","stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":100,"cache_read_input_tokens":300,"cache_creation_input_tokens":200}}}',
+        '{"timestamp":"2026-08-04T12:00:00+08:00","type":"assistant","message":{"id":"message-b","model":"test-model-b","stop_reason":null,"usage":{"input_tokens":2000,"output_tokens":200,"cache_read_input_tokens":500,"cache_creation_input_tokens":0}}}',
+        '{"timestamp":"2026-08-04T12:00:01+08:00","type":"assistant","message":{"id":"message-b","model":"test-model-b","stop_reason":"end_turn","usage":{"input_tokens":2000,"output_tokens":500,"cache_read_input_tokens":500,"cache_creation_input_tokens":0}}}',
+        '{"timestamp":"2026-08-04T13:00:00+08:00","type":"assistant","message":{"id":"message-c","model":"test-model-c","stop_reason":null,"usage":{"input_tokens":400,"output_tokens":50,"cache_read_input_tokens":100,"cache_creation_input_tokens":50}}}',
+        '{"timestamp":"2026-08-04T13:00:01+08:00","type":"assistant","message":{"id":"message-c","model":"test-model-c","stop_reason":null,"usage":{"input_tokens":400,"output_tokens":150,"cache_read_input_tokens":100,"cache_creation_input_tokens":50}}}'
     )
     [System.IO.File]::WriteAllLines($claudeFile, $claudeLines, [System.Text.UTF8Encoding]::new($false))
     [System.IO.File]::WriteAllText($officialSettingsFile, '{}', [System.Text.UTF8Encoding]::new($false))
