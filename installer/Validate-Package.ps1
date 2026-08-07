@@ -1,6 +1,7 @@
 ﻿[CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$PackagePath
+    [Parameter(Mandatory)][string]$PackagePath,
+    [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$ExpectedVersion
 )
 
 Set-StrictMode -Version 2.0
@@ -9,6 +10,7 @@ $ErrorActionPreference = 'Stop'
 $installRoot = Join-Path $env:LOCALAPPDATA 'CC Status'
 $controlExe = Join-Path $installRoot 'CCStatusControl.exe'
 $statusAppPs1 = Join-Path $installRoot 'CCStatus.ps1'
+$installedVersionPath = Join-Path $installRoot 'VERSION'
 $pidFile = Join-Path $installRoot 'data\status.pid'
 $hooksPath = Join-Path $env:USERPROFILE '.codex\hooks.json'
 $claudeSettingsPath = Join-Path $env:USERPROFILE '.claude\settings.json'
@@ -25,12 +27,19 @@ function Write-Pass {
 
 function Write-Fail {
     param([string]$Message)
-    Write-Host "[Validate] FAIL: $Message" -ForegroundColor Red
-    exit 1
+    throw "[Validate] FAIL: $Message"
 }
 
 if (-not (Test-Path -LiteralPath $PackagePath)) {
     Write-Fail "安装包不存在：$PackagePath"
+}
+
+$existingStatusProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.CommandLine -match '(?i)CCStatus\.ps1'
+})
+if ($existingStatusProcesses.Count -gt 0) {
+    $processIds = ($existingStatusProcesses | ForEach-Object { [string]$_.ProcessId }) -join ', '
+    Write-Fail "检测到正在运行的 CC Status（PID $processIds）。请先退出组件，再验证安装包。"
 }
 
 Write-Step '1/5 静默安装安装包'
@@ -46,6 +55,13 @@ if (-not (Test-Path -LiteralPath $statusAppPs1)) {
 }
 if (-not (Test-Path -LiteralPath $controlExe)) {
     Write-Fail "控制程序缺失：$controlExe"
+}
+if (-not (Test-Path -LiteralPath $installedVersionPath)) {
+    Write-Fail "版本文件缺失：$installedVersionPath"
+}
+$installedVersion = ([System.IO.File]::ReadAllText($installedVersionPath, [System.Text.UTF8Encoding]::new($false))).Trim()
+if ($installedVersion -ne $ExpectedVersion) {
+    Write-Fail "安装版本异常：$installedVersion（期望 $ExpectedVersion）"
 }
 foreach ($bridgeName in @(
     'Write-AgentStatus.ps1',
@@ -67,8 +83,9 @@ if ($statusAppText -notmatch 'CloseButton') {
     Write-Fail '主脚本缺少 CloseButton（关闭按钮）'
 }
 $version = (Get-Item -LiteralPath $controlExe).VersionInfo.FileVersion
-if ($version -ne '1.0.0.0') {
-    Write-Fail "Control.exe 版本异常：$version（期望 1.0.0.0）"
+$expectedFileVersion = "$ExpectedVersion.0"
+if ($version -ne $expectedFileVersion) {
+    Write-Fail "Control.exe 版本异常：$version（期望 $expectedFileVersion）"
 }
 $desktopShortcutPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'CC Status.lnk'
 $installedIconPath = Join-Path $installRoot 'CCStatus.ico'
@@ -85,7 +102,7 @@ if ($actualTarget -ne $expectedTarget) {
 if ($shortcut.IconLocation -notmatch ('^' + [regex]::Escape($installedIconPath) + '(,0)?$')) {
     Write-Fail "桌面快捷方式图标异常：$($shortcut.IconLocation)（期望 $installedIconPath）"
 }
-Write-Pass "文件、桌面快捷方式和图标就位，Control.exe 版本 $version"
+Write-Pass "文件、桌面快捷方式和图标就位，版本 $installedVersion，Control.exe 版本 $version"
 
 Write-Step '3/5 检查 hooks.json'
 if (-not (Test-Path -LiteralPath $hooksPath)) {

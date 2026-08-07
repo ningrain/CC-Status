@@ -10,8 +10,6 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("Control center for CC Status")]
 [assembly: AssemblyCompany("Local Codex Tools")]
 [assembly: AssemblyProduct("CC Status")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
 
 internal static class CCStatusControl
 {

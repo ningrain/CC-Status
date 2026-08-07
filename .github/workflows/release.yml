@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build-draft-release
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify version and tag
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content .\VERSION -Raw).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+              throw "VERSION is not MAJOR.MINOR.PATCH: $version"
+          }
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+              throw "Tag $env:GITHUB_REF_NAME does not match VERSION $version."
+          }
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) {
+              throw 'Release tag must point to a commit contained in main.'
+          }
+          "CC_STATUS_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Run tests
+        shell: powershell
+        run: >-
+          powershell.exe -NoProfile -ExecutionPolicy Bypass
+          -File .\tests\Run-All.ps1
+
+      - name: Build and validate installer
+        shell: powershell
+        run: >-
+          powershell.exe -NoProfile -ExecutionPolicy Bypass
+          -File .\installer\Build-Installer.ps1
+
+      - name: Prepare release assets and notes
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packageName = "CC-Status-Setup-$env:CC_STATUS_VERSION.exe"
+          $packagePath = Join-Path (Split-Path -Parent $env:GITHUB_WORKSPACE) $packageName
+          if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) {
+              throw "Installer not found: $packagePath"
+          }
+          $checksumPath = "$packagePath.sha256"
+          $digest = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText($checksumPath, "$digest  $packageName`n", [System.Text.Encoding]::ASCII)
+
+          $changelog = @(Get-Content .\CHANGELOG.md)
+          $heading = "## [$env:CC_STATUS_VERSION]"
+          $start = -1
+          for ($index = 0; $index -lt $changelog.Count; $index++) {
+              if ($changelog[$index].StartsWith($heading, [System.StringComparison]::Ordinal)) {
+                  $start = $index + 1
+                  break
+              }
+          }
+          if ($start -lt 0) { throw "CHANGELOG.md has no section for $env:CC_STATUS_VERSION." }
+          $end = $changelog.Count
+          for ($index = $start; $index -lt $changelog.Count; $index++) {
+              if ($changelog[$index] -match '^## \[' -or $changelog[$index] -match '^\[[^]]+\]:') {
+                  $end = $index
+                  break
+              }
+          }
+          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          $notes = (($changelog[$start..($end - 1)] -join "`n").Trim() + "`n")
+          [System.IO.File]::WriteAllText($notesPath, $notes, [System.Text.UTF8Encoding]::new($false))
+
+          "CC_STATUS_PACKAGE=$packagePath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CC_STATUS_CHECKSUM=$checksumPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CC_STATUS_RELEASE_NOTES=$notesPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CC-Status-${{ env.CC_STATUS_VERSION }}
+          path: |
+            ${{ env.CC_STATUS_PACKAGE }}
+            ${{ env.CC_STATUS_CHECKSUM }}
+          if-no-files-found: error
+
+      - name: Create draft release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME `
+            $env:CC_STATUS_PACKAGE `
+            $env:CC_STATUS_CHECKSUM `
+            --draft `
+            --verify-tag `
+            --title "CC Status $env:CC_STATUS_VERSION" `
+            --notes-file $env:CC_STATUS_RELEASE_NOTES

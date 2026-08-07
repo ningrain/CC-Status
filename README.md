@@ -59,15 +59,10 @@ EXE 安装版可使用开始菜单里的“卸载 CC Status”或 Windows“已�
 
 ## 开发验证
 
-在 PowerShell 中运行：
+完整验证：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-StatusBridge.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-RolloutMonitor.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-ApprovalMonitor.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-ClaudeTranscriptState.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-AgentUsage.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Installer.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-All.ps1
 ```
 
 安装包构建：
@@ -76,6 +71,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Installer.p
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\installer\Build-Installer.ps1
 ```
 
-构建脚本会清理项目根目录上一级中的旧版本 CC Status 安装包、编译控制程序，并把 `CC-Status-Setup-1.0.0.exe` 生成到该目录。例如项目位于 `D:\VibeCoding\CC-Status` 时，安装包会输出到 `D:\VibeCoding\CC-Status-Setup-1.0.0.exe`。脚本还可静默安装并验证文件、版本、Hooks、桌面快捷方式和进程；可用 `-SkipValidation` 跳过安装验证。安装包不再写入仓库目录。
+构建脚本从根目录 `VERSION` 读取版本，清理项目根目录上一级中的旧安装包，并把 `CC-Status-Setup-<version>.exe` 生成到该目录。例如项目位于 `D:\VibeCoding\CC-Status` 时，安装包会输出到项目目录的上一级。脚本还会静默安装并验证文件、版本、Hooks、桌面快捷方式和进程；可用 `-SkipValidation` 跳过安装验证。安装包不写入仓库目录。
+
+版本变化记录见 [CHANGELOG.md](CHANGELOG.md)，分支、版本号和发布步骤见 [发布流程](docs/RELEASING.md)。
 
 状态主要来自 Codex 与 Claude Code 的任务提交、权限请求、工具执行、停止及会话结束事件。Claude 手动拒绝权限时，组件还会检查对应 transcript 的工具结果，避免状态卡在“需要批准”。
