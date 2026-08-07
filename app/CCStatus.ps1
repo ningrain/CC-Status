@@ -1238,6 +1238,7 @@ $window.add_Closed({
 
 $null = Repair-StatusHooks
 $script:claudeSettingsFingerprint = Get-StatusFileFingerprint -Path $claudeSettingsPath
+$script:claudeSettingsChangedAt = [DateTimeOffset]::UtcNow
 Invoke-StatusRefresh
 $timer.Start()
 if (-not $window.IsVisible) { $window.Show() }

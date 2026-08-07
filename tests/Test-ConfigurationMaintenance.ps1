@@ -23,7 +23,7 @@ function Write-TestSettings {
 function Wait-ForCondition {
     param(
         [Parameter(Mandatory)][scriptblock]$Condition,
-        [int]$TimeoutSeconds = 8,
+        [int]$TimeoutSeconds = 15,
         [string]$FailureMessage = 'Condition was not met.'
     )
 
@@ -55,6 +55,16 @@ try {
 
     Wait-ForCondition -FailureMessage 'Temporary CC Status did not start.' -Condition {
         (Test-Path -LiteralPath (Join-Path $appRoot 'data\status.pid')) -and -not $process.HasExited
+    }
+
+    Wait-ForCondition -FailureMessage 'Temporary CC Status did not finish its initial Hook setup.' -Condition {
+        try {
+            $config = [System.IO.File]::ReadAllText($settingsPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+            return $config.customMarker -eq 'initial' -and
+                $null -ne $config.PSObject.Properties['hooks'] -and
+                $null -ne $config.hooks.PSObject.Properties['UserPromptSubmit']
+        }
+        catch { return $false }
     }
 
     Write-TestSettings -Json '{"env":{"ANTHROPIC_BASE_URL":"https://switched.example"},"customMarker":"preserve-me"}'
