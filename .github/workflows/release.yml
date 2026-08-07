@@ -62,7 +62,10 @@ jobs:
           $digest = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
           [System.IO.File]::WriteAllText($checksumPath, "$digest  $packageName`n", [System.Text.Encoding]::ASCII)
 
-          $changelog = @(Get-Content .\CHANGELOG.md)
+          $changelog = @([System.IO.File]::ReadAllLines(
+              (Resolve-Path .\CHANGELOG.md),
+              [System.Text.UTF8Encoding]::new($false)
+          ))
           $heading = "## [$env:CC_STATUS_VERSION]"
           $start = -1
           for ($index = 0; $index -lt $changelog.Count; $index++) {
