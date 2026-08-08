@@ -7,7 +7,18 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$installRoot = Join-Path $env:LOCALAPPDATA 'CC Status'
+$uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B2164CC1-52ED-4B5F-907B-BA6994282155}_is1'
+$registeredInstallRoot = ''
+try {
+    $registeredInstallRoot = [string](Get-ItemPropertyValue -LiteralPath $uninstallKey -Name 'InstallLocation' -ErrorAction Stop)
+}
+catch {}
+$installRoot = if ([string]::IsNullOrWhiteSpace($registeredInstallRoot)) {
+    Join-Path $env:LOCALAPPDATA 'CC Status'
+}
+else {
+    $registeredInstallRoot.TrimEnd('\')
+}
 $controlExe = Join-Path $installRoot 'CCStatusControl.exe'
 $statusAppPs1 = Join-Path $installRoot 'CCStatus.ps1'
 $installedVersionPath = Join-Path $installRoot 'VERSION'

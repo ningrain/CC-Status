@@ -159,6 +159,7 @@ try {
     $status = switch ($hookEventName) {
         'UserPromptSubmit' { 'working' }
         'PermissionRequest' { 'approval' }
+        'ToolExecutionStarted' { 'working' }
         'PostToolUse' { 'working' }
         'PostToolUseFailure' { 'working' }
         'PostToolBatch' { 'working' }

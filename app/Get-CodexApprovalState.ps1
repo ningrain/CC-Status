@@ -170,16 +170,38 @@ function Update-CodexApprovalStates {
             continue
         }
 
-        # Resolution and completion events only close an approval. They must not
-        # create a new working timestamp, because the rollout owns task duration.
+        # An explicit approval response means the tool is about to execute. Keep
+        # the rollout as the liveness authority, but publish a newer working state
+        # so the UI does not remain stuck on approval until the tool returns.
         if ($script:CodexApprovalStates.ContainsKey($identity.threadId)) {
             $existing = $script:CodexApprovalStates[$identity.threadId]
             $identityTurn = [string]$identity.turnId
             if ([string]::IsNullOrWhiteSpace($identityTurn) -or [string]$existing.turnId -eq $identityTurn) {
-                if ([string]$row.Body -match '(?i)\b(denied|rejected|declined|canceled|cancelled)\b') {
+                $isDenied = [string]$row.Body -match '(?i)\b(denied|rejected|declined|canceled|cancelled)\b'
+                $isApprovalResponse =
+                    [string]$row.Target -eq 'codex_core::session::handlers' -and
+                    [string]$row.Body -match 'op:\s*(ExecApproval|RequestPermissionsResponse)'
+                if ($isDenied) {
                     $script:CodexApprovalDeniedThreads[$identity.threadId] = [DateTimeOffset]::UtcNow
+                    $script:CodexApprovalStates.Remove($identity.threadId)
                 }
-                $script:CodexApprovalStates.Remove($identity.threadId)
+                elseif ($isApprovalResponse) {
+                    $timestamp = [DateTimeOffset]::FromUnixTimeSeconds([long]$row.Timestamp).ToString('o')
+                    $script:CodexApprovalStates[$identity.threadId] = [pscustomobject][ordered]@{
+                        provider = 'codex'
+                        sessionId = $identity.threadId
+                        turnId = [string]$existing.turnId
+                        status = 'working'
+                        startedAt = [string]$existing.startedAt
+                        updatedAt = $timestamp
+                        cwd = [string]$existing.cwd
+                        model = [string]$existing.model
+                        source = 'app-log'
+                    }
+                }
+                else {
+                    $script:CodexApprovalStates.Remove($identity.threadId)
+                }
             }
         }
     }

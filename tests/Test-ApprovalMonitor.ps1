@@ -71,7 +71,17 @@ $legacyResolution = [pscustomobject]@{
     Body = "thread_id=$legacyThreadId op: ExecApproval turn_id: Some(`"$legacyTurnId`") decision: Approved"
 }
 Update-CodexApprovalStates -Rows @($legacyResolution)
-Assert-Equal $script:CodexApprovalStates.Count 0 'Compact approval state was not cleared.'
+Assert-Equal $script:CodexApprovalStates[$legacyThreadId].status 'working' 'Approved command did not return to working state before completion.'
 Assert-Equal $script:CodexApprovalDeniedThreads.ContainsKey($legacyThreadId) $false 'Approved approval thread was incorrectly recorded as denied.'
+
+$legacyCompletion = [pscustomobject]@{
+    Id = 15L
+    Timestamp = $now + 5
+    Target = 'codex_core::tools::parallel'
+    ThreadId = $legacyThreadId
+    Body = "thread_id=$legacyThreadId turn_id=$legacyTurnId tool call completed"
+}
+Update-CodexApprovalStates -Rows @($legacyCompletion)
+Assert-Equal $script:CodexApprovalStates.Count 0 'Completed approved command left a transient working override behind.'
 
 Write-Host 'Approval monitor tests passed.' -ForegroundColor Green

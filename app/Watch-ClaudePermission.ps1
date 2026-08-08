@@ -13,6 +13,47 @@ $bridgePath = Join-Path $PSScriptRoot 'Write-ClaudeStatus.ps1'
 $powershellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(5, $TimeoutSeconds))
 $targetToolUseId = ''
+$executionStarted = $false
+$initialProcessIds = @{}
+
+function Get-ProcessSnapshot {
+    $snapshot = @{}
+    try {
+        foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+            $snapshot[[int]$process.ProcessId] = $process
+        }
+    }
+    catch {}
+    return $snapshot
+}
+
+function Test-ClaudeShellStarted {
+    param(
+        [Parameter(Mandatory)][hashtable]$InitialProcessIds,
+        [Parameter(Mandatory)][hashtable]$CurrentProcesses
+    )
+
+    if ($ToolName -ne 'Bash') { return $false }
+    $shellNames = @('bash.exe', 'sh.exe', 'cmd.exe', 'powershell.exe', 'pwsh.exe', 'wsl.exe')
+    foreach ($process in @($CurrentProcesses.Values)) {
+        $processId = [int]$process.ProcessId
+        if ($InitialProcessIds.ContainsKey($processId) -or [string]$process.Name -notin $shellNames) { continue }
+
+        $parentId = [int]$process.ParentProcessId
+        for ($depth = 0; $depth -lt 8 -and $parentId -gt 0; $depth++) {
+            if (-not $CurrentProcesses.ContainsKey($parentId)) { break }
+            $parent = $CurrentProcesses[$parentId]
+            $parentName = [string]$parent.Name
+            $parentCommandLine = [string]$parent.CommandLine
+            if ($parentName -eq 'claude.exe' -or
+                ($parentName -eq 'node.exe' -and $parentCommandLine -match '(?i)(claude-code|[\\/]claude(?:\.cmd|\.js)?(?:\s|$))')) {
+                return $true
+            }
+            $parentId = [int]$parent.ParentProcessId
+        }
+    }
+    return $false
+}
 
 function Read-TranscriptRows {
     param([Parameter(Mandatory)][string]$Path)
@@ -100,6 +141,8 @@ function Invoke-ResolutionHook {
     $payload | & $powershellPath -NoProfile -ExecutionPolicy Bypass -File $bridgePath | Out-Null
 }
 
+$initialProcessIds = Get-ProcessSnapshot
+
 while ([DateTime]::UtcNow -lt $deadline) {
     $rows = Read-TranscriptRows -Path $TranscriptPath
     if ([string]::IsNullOrWhiteSpace($targetToolUseId)) {
@@ -117,7 +160,11 @@ while ([DateTime]::UtcNow -lt $deadline) {
             exit 0
         }
     }
-    Start-Sleep -Milliseconds 250
+    if (-not $executionStarted -and (Test-ClaudeShellStarted -InitialProcessIds $initialProcessIds -CurrentProcesses (Get-ProcessSnapshot))) {
+        Invoke-ResolutionHook -EventName 'ToolExecutionStarted'
+        $executionStarted = $true
+    }
+    Start-Sleep -Milliseconds 150
 }
 
 exit 0
