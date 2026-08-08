@@ -16,6 +16,22 @@
 
 - 暂无。
 
+## [1.1.2] - 2026-08-08
+
+### 新增
+
+- 暂无。
+
+### 变更
+
+- 状态卡片左上角增加“CC Status”产品名称，并适配深色与浅色主题。
+
+### 修复
+
+- 批准 Bash 命令后，在命令执行开始时恢复“工作中”状态，无需等待命令返回。
+- 修复源码版启动后仍沿用已安装版 Hook 路径，导致 Claude/Codex 状态写入另一份数据目录的问题。
+- 修复安装包验证未复用已登记安装目录而误报文件缺失的问题。
+
 ## [1.1.1] - 2026-08-08
 
 ### 新增
@@ -69,6 +85,8 @@
 - 修复瞬时文件访问失败可能导致组件退出的问题。
 - 修复运行中卸载后进程或托盘图标残留的问题。
 
-[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/ningrain/CC-Status/compare/v1.1.1...v1.1.2
+[1.1.1]: https://github.com/ningrain/CC-Status/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/ningrain/CC-Status/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ningrain/CC-Status/releases/tag/v1.0.0

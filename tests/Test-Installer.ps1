@@ -176,6 +176,7 @@ try {
     Assert-True ($statusSource -match 'Apply-Theme') 'CC Status does not expose theme switching.'
     Assert-True ($statusSource -match 'x:Name="ThemeButton"') 'CC Status does not place the theme button in the component.'
     Assert-True ($statusSource -match 'x:Name="SoundButton"') 'CC Status does not place the sound button in the component.'
+    Assert-True ($statusSource -match 'x:Name="AppNameText"[^>]*Text="CC Status"') 'CC Status does not display its product name in the component.'
     Assert-True (($statusSource -match "'🔔'") -and ($statusSource -match "'🔕'")) 'Sound button does not expose enabled and disabled icons.'
     Assert-True (($statusSource -match '提示音已开启（点击关闭）') -and ($statusSource -match '提示音已关闭（点击开启）')) 'Sound button tooltips do not describe the toggle action.'
     Assert-True (($statusSource -match "'☾'") -and ($statusSource -match "'☀'")) 'Theme button does not use moon and sun icons.'
@@ -197,6 +198,7 @@ try {
     Assert-True ($packageSource -match 'Excludes:\s*"data\\\*"') 'Installer package does not exclude local runtime data.'
     $validatorSource = Get-Content -LiteralPath (Join-Path $projectRoot 'installer\Validate-Package.ps1') -Raw
     Assert-True ($validatorSource -match 'settingsHashBefore') 'Package validation does not verify user settings preservation.'
+    Assert-True ($validatorSource -match "Get-ItemPropertyValue.+InstallLocation") 'Package validation does not reuse the registered installation directory.'
 
     $installedStatusPath = Join-Path $installRoot 'CCStatus.ps1'
     $installedPidPath = Join-Path $installRoot 'data\status.pid'

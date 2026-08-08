@@ -167,6 +167,10 @@ $xaml = @"
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
+                <TextBlock x:Name="AppNameText" Grid.ColumnSpan="3" Text="CC Status"
+                           Foreground="#7F8A99" FontSize="11" FontWeight="SemiBold"
+                           HorizontalAlignment="Left" VerticalAlignment="Top" />
+
                 <Grid Grid.Column="0" Width="56" Height="56" VerticalAlignment="Center">
                     <Ellipse x:Name="IndicatorGlow" Fill="#224DA3FF">
                         <Ellipse.Effect>
@@ -271,6 +275,7 @@ $cardShadow = $window.FindName('CardShadow')
 $indicatorGlow = $window.FindName('IndicatorGlow')
 $indicatorRing = $window.FindName('IndicatorRing')
 $indicatorIcon = $window.FindName('IndicatorIcon')
+$appNameText = $window.FindName('AppNameText')
 $sourceText = $window.FindName('SourceText')
 $statusText = $window.FindName('StatusText')
 $codexUsageText = $window.FindName('CodexUsageText')
@@ -348,6 +353,7 @@ function Apply-Theme {
         $card.BorderBrush = New-Brush '#553C4B5D'
         $cardShadow.Color = [System.Windows.Media.ColorConverter]::ConvertFromString('#667A8998')
         $cardShadow.Opacity = 0.35
+        $appNameText.Foreground = New-Brush '#64748B'
         $sourceText.Foreground = New-Brush '#64748B'
         $statusText.Foreground = New-Brush '#17212F'
         $codexUsageText.Foreground = New-Brush '#64748B'
@@ -364,6 +370,7 @@ function Apply-Theme {
         $card.BorderBrush = New-Brush '#555B6570'
         $cardShadow.Color = [System.Windows.Media.ColorConverter]::ConvertFromString('#000000')
         $cardShadow.Opacity = 0.55
+        $appNameText.Foreground = New-Brush '#7F8A99'
         $sourceText.Foreground = New-Brush '#A0A8B5'
         $statusText.Foreground = New-Brush '#FFFFFF'
         $codexUsageText.Foreground = New-Brush '#BBC5D1'
@@ -875,19 +882,25 @@ function Add-HookProperty {
 }
 
 function Test-StatusHandler {
-    param($Handler)
+    param(
+        $Handler,
+        [string]$ExpectedScriptPath
+    )
 
     if ($null -eq $Handler) { return $false }
     $command = ''
     if ($null -ne $Handler.PSObject.Properties['command']) { $command += [string]$Handler.command }
     if ($null -ne $Handler.PSObject.Properties['commandWindows']) { $command += [string]$Handler.commandWindows }
-    return $command -match '(?i)Write-(AgentStatus|ClaudeStatus|Codex)\.ps1'
+    if ($command -notmatch '(?i)Write-(AgentStatus|ClaudeStatus|Codex)\.ps1') { return $false }
+    if ([string]::IsNullOrWhiteSpace($ExpectedScriptPath)) { return $true }
+    return $command.IndexOf($ExpectedScriptPath, [StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
 function Test-EventHasStatusHandler {
     param(
         [Parameter(Mandatory)]$Hooks,
-        [Parameter(Mandatory)][string]$EventName
+        [Parameter(Mandatory)][string]$EventName,
+        [string]$ExpectedScriptPath
     )
 
     if ($null -eq $Hooks.PSObject.Properties[$EventName]) { return $false }
@@ -895,7 +908,7 @@ function Test-EventHasStatusHandler {
         $handlers = @()
         if ($null -ne $group.PSObject.Properties['hooks']) { $handlers = @($group.hooks) }
         foreach ($handler in $handlers) {
-            if (Test-StatusHandler $handler) { return $true }
+            if (Test-StatusHandler -Handler $handler -ExpectedScriptPath $ExpectedScriptPath) { return $true }
         }
     }
     return $false
@@ -904,7 +917,8 @@ function Test-EventHasStatusHandler {
 function Test-NotificationMatcherHandler {
     param(
         [Parameter(Mandatory)]$Hooks,
-        [Parameter(Mandatory)][string]$Matcher
+        [Parameter(Mandatory)][string]$Matcher,
+        [string]$ExpectedScriptPath
     )
 
     if ($null -eq $Hooks.PSObject.Properties['Notification']) { return $false }
@@ -915,10 +929,33 @@ function Test-NotificationMatcherHandler {
         $handlers = @()
         if ($null -ne $group.PSObject.Properties['hooks']) { $handlers = @($group.hooks) }
         foreach ($handler in $handlers) {
-            if (Test-StatusHandler $handler) { return $true }
+            if (Test-StatusHandler -Handler $handler -ExpectedScriptPath $ExpectedScriptPath) { return $true }
         }
     }
     return $false
+}
+
+function Remove-StatusHandlersFromEvents {
+    param(
+        [Parameter(Mandatory)]$Hooks,
+        [Parameter(Mandatory)][string[]]$EventNames
+    )
+
+    foreach ($eventName in $EventNames) {
+        if ($null -eq $Hooks.PSObject.Properties[$eventName]) { continue }
+        $keptGroups = New-Object System.Collections.ArrayList
+        foreach ($group in @($Hooks.$eventName)) {
+            $handlers = @()
+            if ($null -ne $group.PSObject.Properties['hooks']) {
+                $handlers = @($group.hooks | Where-Object { -not (Test-StatusHandler -Handler $_) })
+            }
+            if ($handlers.Count -gt 0) {
+                Add-HookProperty -Object $group -Name 'hooks' -Value $handlers
+                $null = $keptGroups.Add($group)
+            }
+        }
+        Add-HookProperty -Object $Hooks -Name $eventName -Value @($keptGroups)
+    }
 }
 
 function Add-ClaudeStatusHook {
@@ -1039,17 +1076,26 @@ function Repair-StatusHooks {
             }
 
             $claudeEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch', 'PermissionDenied', 'Stop', 'StopFailure', 'SessionEnd')
-            $changed = $false
+            $handlersUseCurrentPath = $true
             foreach ($eventName in $claudeEvents) {
-                if (-not (Test-EventHasStatusHandler -Hooks $config.hooks -EventName $eventName)) {
-                    Add-ClaudeStatusHook -Hooks $config.hooks -EventName $eventName -ScriptPath $claudeBridgePath
-                    $changed = $true
+                if (-not (Test-EventHasStatusHandler -Hooks $config.hooks -EventName $eventName -ExpectedScriptPath $claudeBridgePath)) {
+                    $handlersUseCurrentPath = $false
                 }
             }
             foreach ($matcher in @('permission_prompt', 'idle_prompt')) {
-                if (-not (Test-NotificationMatcherHandler -Hooks $config.hooks -Matcher $matcher)) {
+                if (-not (Test-NotificationMatcherHandler -Hooks $config.hooks -Matcher $matcher -ExpectedScriptPath $claudeBridgePath)) {
+                    $handlersUseCurrentPath = $false
+                }
+            }
+
+            $changed = -not $handlersUseCurrentPath
+            if ($changed) {
+                Remove-StatusHandlersFromEvents -Hooks $config.hooks -EventNames @($claudeEvents + 'Notification')
+                foreach ($eventName in $claudeEvents) {
+                    Add-ClaudeStatusHook -Hooks $config.hooks -EventName $eventName -ScriptPath $claudeBridgePath
+                }
+                foreach ($matcher in @('permission_prompt', 'idle_prompt')) {
                     Add-ClaudeStatusHook -Hooks $config.hooks -EventName 'Notification' -ScriptPath $claudeBridgePath -Matcher $matcher
-                    $changed = $true
                 }
             }
 
@@ -1082,12 +1128,19 @@ function Repair-StatusHooks {
             $codexHookCommand = 'powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "{0}"' -f $escapedCodexBridgePath
 
             $codexEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop')
-            $changed = $false
+            $handlersUseCurrentPath = $true
             foreach ($eventName in $codexEvents) {
-                if (-not (Test-EventHasStatusHandler -Hooks $config.hooks -EventName $eventName)) {
+                if (-not (Test-EventHasStatusHandler -Hooks $config.hooks -EventName $eventName -ExpectedScriptPath $codexBridgePath)) {
+                    $handlersUseCurrentPath = $false
+                }
+            }
+
+            $changed = -not $handlersUseCurrentPath
+            if ($changed) {
+                Remove-StatusHandlersFromEvents -Hooks $config.hooks -EventNames $codexEvents
+                foreach ($eventName in $codexEvents) {
                     $matcher = if ($eventName -eq 'PermissionRequest' -or $eventName -eq 'PostToolUse') { '.*' } else { '' }
                     Add-CodexStatusHook -Hooks $config.hooks -EventName $eventName -Matcher $matcher -Command $codexHookCommand
-                    $changed = $true
                 }
             }
 

@@ -10,7 +10,9 @@ $testRoot = Join-Path $PSScriptRoot '.test-configuration-maintenance'
 $appRoot = Join-Path $testRoot 'app'
 $fakeHome = Join-Path $testRoot 'home'
 $claudeHome = Join-Path $fakeHome '.claude'
+$codexHome = Join-Path $fakeHome '.codex'
 $settingsPath = Join-Path $claudeHome 'settings.json'
+$codexHooksPath = Join-Path $codexHome 'hooks.json'
 $stdoutPath = Join-Path $testRoot 'cc-status.stdout.log'
 $stderrPath = Join-Path $testRoot 'cc-status.stderr.log'
 $process = $null
@@ -36,11 +38,37 @@ function Wait-ForCondition {
 }
 
 if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
-$null = New-Item -ItemType Directory -Path $appRoot, $claudeHome -Force
+$null = New-Item -ItemType Directory -Path $appRoot, $claudeHome, $codexHome -Force
 Copy-Item -Path (Join-Path $sourceAppRoot '*') -Destination $appRoot -Recurse -Force
 
 try {
-    Write-TestSettings -Json '{"env":{"ANTHROPIC_BASE_URL":"https://initial.example"},"customMarker":"initial"}'
+    $oldClaudePath = 'D:\CC Status\Write-ClaudeStatus.ps1'
+    $oldCodexPath = 'D:\CC Status\Write-Codex.ps1'
+    $initialClaudeConfig = [pscustomobject][ordered]@{
+        env = [pscustomobject]@{ ANTHROPIC_BASE_URL = 'https://initial.example' }
+        customMarker = 'initial'
+        hooks = [pscustomobject]@{
+            UserPromptSubmit = @([pscustomobject]@{
+                hooks = @(
+                    [pscustomobject]@{ type = 'command'; command = "& '$oldClaudePath'" },
+                    [pscustomobject]@{ type = 'command'; command = 'custom-claude-hook' }
+                )
+            })
+        }
+    }
+    Write-TestSettings -Json ($initialClaudeConfig | ConvertTo-Json -Depth 10)
+    $initialCodexConfig = [pscustomobject][ordered]@{
+        customMarker = 'codex-preserve'
+        hooks = [pscustomobject]@{
+            UserPromptSubmit = @([pscustomobject]@{
+                hooks = @(
+                    [pscustomobject]@{ type = 'command'; command = "powershell.exe -File `"$oldCodexPath`"" },
+                    [pscustomobject]@{ type = 'command'; command = 'custom-codex-hook' }
+                )
+            })
+        }
+    }
+    [System.IO.File]::WriteAllText($codexHooksPath, ($initialCodexConfig | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
 
     $oldUserProfile = $env:USERPROFILE
     $env:USERPROFILE = $fakeHome
@@ -60,9 +88,19 @@ try {
     Wait-ForCondition -FailureMessage 'Temporary CC Status did not finish its initial Hook setup.' -Condition {
         try {
             $config = [System.IO.File]::ReadAllText($settingsPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+            $codexConfig = [System.IO.File]::ReadAllText($codexHooksPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+            $claudeCommands = @($config.hooks.UserPromptSubmit | ForEach-Object { @($_.hooks) } | ForEach-Object { $_.command })
+            $codexCommands = @($codexConfig.hooks.UserPromptSubmit | ForEach-Object { @($_.hooks) } | ForEach-Object { $_.command })
             return $config.customMarker -eq 'initial' -and
                 $null -ne $config.PSObject.Properties['hooks'] -and
-                $null -ne $config.hooks.PSObject.Properties['UserPromptSubmit']
+                $null -ne $config.hooks.PSObject.Properties['UserPromptSubmit'] -and
+                @($claudeCommands | Where-Object { $_ -eq 'custom-claude-hook' }).Count -eq 1 -and
+                @($claudeCommands | Where-Object { $_ -like "*$appRoot\Write-ClaudeStatus.ps1*" }).Count -eq 1 -and
+                @($claudeCommands | Where-Object { $_ -like "*$oldClaudePath*" }).Count -eq 0 -and
+                $codexConfig.customMarker -eq 'codex-preserve' -and
+                @($codexCommands | Where-Object { $_ -eq 'custom-codex-hook' }).Count -eq 1 -and
+                @($codexCommands | Where-Object { $_ -like "*$appRoot\Write-Codex.ps1*" }).Count -eq 1 -and
+                @($codexCommands | Where-Object { $_ -like "*$oldCodexPath*" }).Count -eq 0
         }
         catch { return $false }
     }

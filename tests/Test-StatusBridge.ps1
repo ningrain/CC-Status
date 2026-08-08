@@ -21,6 +21,7 @@ $testClaudeTurnWatcher = Join-Path $testRoot 'Watch-ClaudeTurn.ps1'
 $statePath = Join-Path $testRoot 'data\state.json'
 $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$fakeClaudeProcess = $null
 
 function Assert-Equal {
     param($Expected, $Actual, [string]$Message)
@@ -182,6 +183,12 @@ try {
     $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-1' })[0]
     Assert-Equal 'approval' ([string]$claudeSession.status) 'Claude permission request should set approval state.'
 
+    $output = Invoke-ClaudeHook -EventName 'ToolExecutionStarted' -PromptId 'claude-turn-1'
+    Assert-NoOutput $output 'Claude tool-start detection must not write model-visible output.'
+    $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-1' })[0]
+    Assert-Equal 'working' ([string]$claudeSession.status) 'Claude Bash execution start should restore working state before completion.'
+
     $output = Invoke-ClaudeHook -EventName 'PostToolUse' -PromptId 'claude-turn-1'
     Assert-NoOutput $output 'Claude PostToolUse must not write model-visible output.'
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
@@ -272,6 +279,47 @@ try {
     } while (($null -eq $deniedState -or [string]$deniedState.status -eq 'approval') -and (Get-Date) -lt $deniedDeadline)
     Assert-Equal 'working' ([string]$deniedState.status) 'Manual Claude permission denial should clear approval through the transcript watcher.'
 
+    $startedTranscriptPath = Join-Path $testRoot 'claude-session-started.jsonl'
+    $startedToolUse = [pscustomobject]@{
+        type = 'assistant'
+        message = [pscustomobject]@{
+            content = @([pscustomobject]@{ type = 'tool_use'; id = 'test-tool-use-started'; name = 'Bash'; input = @{ command = 'Start-Sleep -Seconds 5' } })
+        }
+    } | ConvertTo-Json -Depth 10 -Compress
+    [System.IO.File]::WriteAllText($startedTranscriptPath, $startedToolUse + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+
+    $output = Invoke-ClaudeHook -EventName 'UserPromptSubmit' -SessionId 'claude-session-started' -PromptId 'claude-turn-started'
+    Assert-NoOutput $output 'Started Claude prompt must remain silent.'
+    $output = Invoke-ClaudeHook -EventName 'PermissionRequest' -SessionId 'claude-session-started' -PromptId 'claude-turn-started' -TranscriptPath $startedTranscriptPath
+    Assert-NoOutput $output 'Started Claude permission request must remain silent.'
+    Start-Sleep -Seconds 1
+
+    $fakeClaudePath = Join-Path $testRoot 'claude.exe'
+    Copy-Item -LiteralPath $env:ComSpec -Destination $fakeClaudePath -Force
+    $fakeClaudeProcess = Start-Process -FilePath $fakeClaudePath `
+        -ArgumentList @('/c', 'powershell.exe -NoProfile -Command "Start-Sleep -Seconds 5"') `
+        -WindowStyle Hidden -PassThru
+
+    $startedState = $null
+    $startedDeadline = (Get-Date).AddSeconds(4)
+    do {
+        Start-Sleep -Milliseconds 150
+        if (Test-Path -LiteralPath $statePath) {
+            $candidateState = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+            $startedState = @($candidateState.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-started' })[0]
+        }
+    } while (($null -eq $startedState -or [string]$startedState.status -eq 'approval') -and (Get-Date) -lt $startedDeadline)
+    Assert-Equal 'working' ([string]$startedState.status) 'Running Claude Bash process did not clear approval before command completion.'
+    Assert-True (-not $fakeClaudeProcess.HasExited) 'Claude Bash process completed before the working-state assertion.'
+
+    $startedToolResult = [pscustomobject]@{
+        type = 'user'
+        message = [pscustomobject]@{
+            content = @([pscustomobject]@{ type = 'tool_result'; tool_use_id = 'test-tool-use-started'; is_error = $false; content = 'done' })
+        }
+    } | ConvertTo-Json -Depth 10 -Compress
+    [System.IO.File]::AppendAllText($startedTranscriptPath, $startedToolResult + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+
     $output = Invoke-ClaudeHook -EventName 'UserPromptSubmit' -SessionId 'claude-session-2' -PromptId 'claude-turn-2'
     Assert-NoOutput $output 'Second Claude prompt must remain silent.'
     $output = Invoke-ClaudeHook -EventName 'StopFailure' -SessionId 'claude-session-2' -PromptId 'claude-turn-2'
@@ -283,6 +331,10 @@ try {
     Write-Host 'Status bridge tests passed for Codex and Claude.' -ForegroundColor Green
 }
 finally {
+    if ($null -ne $fakeClaudeProcess -and -not $fakeClaudeProcess.HasExited) {
+        $fakeClaudeProcess.Kill()
+        $fakeClaudeProcess.WaitForExit()
+    }
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force
     }
