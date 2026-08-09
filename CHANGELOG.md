@@ -16,6 +16,20 @@
 
 - 暂无。
 
+## [1.1.4] - 2026-08-09
+
+### 新增
+
+- 暂无。
+
+### 变更
+
+- 暂无。
+
+### 修复
+
+- 修复 Claude WebFetch、WebSearch 等内置工具长时间运行时，状态提前变为“无任务”的问题。
+
 ## [1.1.3] - 2026-08-09
 
 ### 新增
@@ -29,7 +43,6 @@
 ### 修复
 
 - 修复 Claude Bash 长时间运行时，状态在命令结束前由“工作中”提前变为“无任务”的问题。
-- 修复 Claude WebFetch、WebSearch 等内置工具长时间运行时，状态提前变为“无任务”的问题。
 
 ## [1.1.2] - 2026-08-08
 
@@ -100,8 +113,9 @@
 - 修复瞬时文件访问失败可能导致组件退出的问题。
 - 修复运行中卸载后进程或托盘图标残留的问题。
 
-[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.1.3...HEAD
-[1.1.3]: https://github.com/ningrain/CC-Status/compare/v1.1.2...v1.1.3
+[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.1.4...HEAD
+[1.1.4]: https://github.com/ningrain/CC-Status/compare/72e9b3486d4b42f48e8384ad8bffd216fc72071e...v1.1.4
+[1.1.3]: https://github.com/ningrain/CC-Status/compare/v1.1.2...72e9b3486d4b42f48e8384ad8bffd216fc72071e
 [1.1.2]: https://github.com/ningrain/CC-Status/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/ningrain/CC-Status/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/ningrain/CC-Status/compare/v1.0.0...v1.1.0
