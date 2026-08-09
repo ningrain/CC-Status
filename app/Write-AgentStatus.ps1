@@ -158,6 +158,7 @@ try {
 
     $status = switch ($hookEventName) {
         'UserPromptSubmit' { 'working' }
+        'TurnHeartbeat' { 'working' }
         'PermissionRequest' { 'approval' }
         'ToolExecutionStarted' { 'working' }
         'PostToolUse' { 'working' }
@@ -238,6 +239,20 @@ try {
         }
     }
 
+    # A delayed watcher from an older turn must never replace the current turn.
+    if ($providerName -eq 'claude' -and $hookEventName -eq 'TurnHeartbeat') {
+        $heartbeatTurnId = Get-StringProperty -Object $hook -Name 'prompt_id'
+        $previousTurnId = if ($null -ne $previousSession) {
+            Get-StringProperty -Object $previousSession -Name 'turnId'
+        }
+        else {
+            ''
+        }
+        if ($null -eq $previousSession -or $previousTurnId -ne $heartbeatTurnId) {
+            exit 0
+        }
+    }
+
     $cwd = Get-StringProperty -Object $hook -Name 'cwd'
     if ([string]::IsNullOrWhiteSpace($cwd) -and $null -ne $previousSession) {
         $cwd = Get-StringProperty -Object $previousSession -Name 'cwd'
@@ -272,6 +287,15 @@ try {
     # window instead of replacing it with a cancellation immediately.
     if ($providerName -eq 'claude' -and $hookEventName -eq 'SessionEnd' -and $null -ne $previousSession -and [string]$previousSession.status -eq 'completed') {
         $status = 'completed'
+    }
+
+    # Turn heartbeats only keep an active working turn fresh. They must not
+    # dismiss a permission prompt or resurrect a terminal state after a race.
+    if ($providerName -eq 'claude' -and $hookEventName -eq 'TurnHeartbeat' -and $null -ne $previousSession) {
+        $previousStatus = Get-StringProperty -Object $previousSession -Name 'status'
+        if ($previousStatus -ne 'working') {
+            $status = $previousStatus
+        }
     }
 
     $sessionState = [pscustomobject][ordered]@{
