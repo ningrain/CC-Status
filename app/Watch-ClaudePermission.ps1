@@ -5,7 +5,8 @@ param(
     [string]$ToolName = '',
     [int]$TimeoutSeconds = 90,
     [int]$ExecutionTimeoutSeconds = 43200,
-    [int]$HeartbeatSeconds = 30
+    [int]$HeartbeatSeconds = 30,
+    [string]$ReadyPath = ''
 )
 
 Set-StrictMode -Version 2.0
@@ -38,7 +39,7 @@ function Find-ClaudeShellExecution {
         [Parameter(Mandatory)][hashtable]$CurrentProcesses
     )
 
-    if ($ToolName -ne 'Bash') { return $false }
+    if ($ToolName -ne 'Bash') { return $null }
     $shellNames = @('bash.exe', 'sh.exe', 'cmd.exe', 'powershell.exe', 'pwsh.exe', 'wsl.exe')
     foreach ($process in @($CurrentProcesses.Values)) {
         $processId = [int]$process.ProcessId
@@ -60,7 +61,7 @@ function Find-ClaudeShellExecution {
             $parentId = [int]$parent.ParentProcessId
         }
     }
-    return $false
+    return $null
 }
 
 function Read-TranscriptRows {
@@ -150,6 +151,12 @@ function Invoke-ResolutionHook {
 }
 
 $initialProcessIds = Get-ProcessSnapshot
+if (-not [string]::IsNullOrWhiteSpace($ReadyPath)) {
+    try {
+        [System.IO.File]::WriteAllText($ReadyPath, '', [System.Text.UTF8Encoding]::new($false))
+    }
+    catch {}
+}
 
 while ([DateTime]::UtcNow -lt $deadline) {
     $rows = Read-TranscriptRows -Path $TranscriptPath

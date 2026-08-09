@@ -295,6 +295,7 @@ try {
     Assert-NoOutput $output 'Started Claude permission request must remain silent.'
     Start-Sleep -Seconds 1
 
+    $permissionWatcherReadyPath = Join-Path $testRoot 'permission-watcher.ready'
     $directPermissionWatcher = Start-Process -FilePath $windowsPowerShell `
         -ArgumentList @(
             '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
@@ -304,10 +305,15 @@ try {
             '-ToolName', 'Bash',
             '-TimeoutSeconds', '8',
             '-ExecutionTimeoutSeconds', '8',
-            '-HeartbeatSeconds', '1'
+            '-HeartbeatSeconds', '1',
+            '-ReadyPath', "`"$permissionWatcherReadyPath`""
         ) `
         -WindowStyle Hidden -PassThru
-    Start-Sleep -Milliseconds 500
+    $permissionWatcherReadyDeadline = (Get-Date).AddSeconds(5)
+    while (-not (Test-Path -LiteralPath $permissionWatcherReadyPath) -and (Get-Date) -lt $permissionWatcherReadyDeadline) {
+        Start-Sleep -Milliseconds 100
+    }
+    Assert-True (Test-Path -LiteralPath $permissionWatcherReadyPath) 'Permission watcher did not finish its initial process snapshot.'
 
     $fakeClaudePath = Join-Path $testRoot 'claude.exe'
     Copy-Item -LiteralPath $env:ComSpec -Destination $fakeClaudePath -Force
