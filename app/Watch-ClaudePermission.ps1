@@ -3,7 +3,9 @@ param(
     [Parameter(Mandatory)][string]$SessionId,
     [Parameter(Mandatory)][string]$TranscriptPath,
     [string]$ToolName = '',
-    [int]$TimeoutSeconds = 90
+    [int]$TimeoutSeconds = 90,
+    [int]$ExecutionTimeoutSeconds = 43200,
+    [int]$HeartbeatSeconds = 30
 )
 
 Set-StrictMode -Version 2.0
@@ -13,7 +15,10 @@ $bridgePath = Join-Path $PSScriptRoot 'Write-ClaudeStatus.ps1'
 $powershellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(5, $TimeoutSeconds))
 $targetToolUseId = ''
-$executionStarted = $false
+$execution = $null
+$executionMissingAt = $null
+$nextHeartbeatAt = [DateTime]::MaxValue
+$nextProcessCheckAt = [DateTime]::MinValue
 $initialProcessIds = @{}
 
 function Get-ProcessSnapshot {
@@ -27,7 +32,7 @@ function Get-ProcessSnapshot {
     return $snapshot
 }
 
-function Test-ClaudeShellStarted {
+function Find-ClaudeShellExecution {
     param(
         [Parameter(Mandatory)][hashtable]$InitialProcessIds,
         [Parameter(Mandatory)][hashtable]$CurrentProcesses
@@ -47,7 +52,10 @@ function Test-ClaudeShellStarted {
             $parentCommandLine = [string]$parent.CommandLine
             if ($parentName -eq 'claude.exe' -or
                 ($parentName -eq 'node.exe' -and $parentCommandLine -match '(?i)(claude-code|[\\/]claude(?:\.cmd|\.js)?(?:\s|$))')) {
-                return $true
+                return [pscustomobject]@{
+                    shellProcessId = $processId
+                    claudeProcessId = [int]$parent.ProcessId
+                }
             }
             $parentId = [int]$parent.ParentProcessId
         }
@@ -160,9 +168,37 @@ while ([DateTime]::UtcNow -lt $deadline) {
             exit 0
         }
     }
-    if (-not $executionStarted -and (Test-ClaudeShellStarted -InitialProcessIds $initialProcessIds -CurrentProcesses (Get-ProcessSnapshot))) {
-        Invoke-ResolutionHook -EventName 'ToolExecutionStarted'
-        $executionStarted = $true
+    $now = [DateTime]::UtcNow
+    if ($now -ge $nextProcessCheckAt) {
+        if ($null -eq $execution) {
+            $execution = Find-ClaudeShellExecution -InitialProcessIds $initialProcessIds -CurrentProcesses (Get-ProcessSnapshot)
+            if ($null -ne $execution) {
+                Invoke-ResolutionHook -EventName 'ToolExecutionStarted'
+                $nextHeartbeatAt = $now.AddSeconds([Math]::Max(1, $HeartbeatSeconds))
+                $deadline = $now.AddSeconds([Math]::Max(10, $ExecutionTimeoutSeconds))
+            }
+            $nextProcessCheckAt = $now.AddMilliseconds(250)
+        }
+        else {
+            $claudeAlive = $null -ne (Get-Process -Id ([int]$execution.claudeProcessId) -ErrorAction SilentlyContinue)
+            if (-not $claudeAlive) { exit 0 }
+
+            $shellAlive = $null -ne (Get-Process -Id ([int]$execution.shellProcessId) -ErrorAction SilentlyContinue)
+            if ($shellAlive) {
+                $executionMissingAt = $null
+                if ($now -ge $nextHeartbeatAt) {
+                    Invoke-ResolutionHook -EventName 'ToolExecutionStarted'
+                    $nextHeartbeatAt = $now.AddSeconds([Math]::Max(1, $HeartbeatSeconds))
+                }
+            }
+            elseif ($null -eq $executionMissingAt) {
+                $executionMissingAt = $now
+            }
+            elseif (($now - $executionMissingAt).TotalSeconds -ge 10) {
+                exit 0
+            }
+            $nextProcessCheckAt = $now.AddSeconds(1)
+        }
     }
     Start-Sleep -Milliseconds 150
 }

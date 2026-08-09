@@ -1,3 +1,6 @@
+# Local IDE settings
+.idea/
+
 # Local test data
 tests/.test-*/
 

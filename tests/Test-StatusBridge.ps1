@@ -22,6 +22,7 @@ $statePath = Join-Path $testRoot 'data\state.json'
 $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $fakeClaudeProcess = $null
+$directPermissionWatcher = $null
 
 function Assert-Equal {
     param($Expected, $Actual, [string]$Message)
@@ -294,10 +295,24 @@ try {
     Assert-NoOutput $output 'Started Claude permission request must remain silent.'
     Start-Sleep -Seconds 1
 
+    $directPermissionWatcher = Start-Process -FilePath $windowsPowerShell `
+        -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+            '-File', "`"$testClaudePermissionWatcher`"",
+            '-SessionId', 'claude-session-started',
+            '-TranscriptPath', "`"$startedTranscriptPath`"",
+            '-ToolName', 'Bash',
+            '-TimeoutSeconds', '8',
+            '-ExecutionTimeoutSeconds', '8',
+            '-HeartbeatSeconds', '1'
+        ) `
+        -WindowStyle Hidden -PassThru
+    Start-Sleep -Milliseconds 500
+
     $fakeClaudePath = Join-Path $testRoot 'claude.exe'
     Copy-Item -LiteralPath $env:ComSpec -Destination $fakeClaudePath -Force
     $fakeClaudeProcess = Start-Process -FilePath $fakeClaudePath `
-        -ArgumentList @('/c', 'powershell.exe -NoProfile -Command "Start-Sleep -Seconds 5"') `
+        -ArgumentList @('/c', 'powershell.exe -NoProfile -Command "Start-Sleep -Seconds 8"') `
         -WindowStyle Hidden -PassThru
 
     $startedState = $null
@@ -312,6 +327,17 @@ try {
     Assert-Equal 'working' ([string]$startedState.status) 'Running Claude Bash process did not clear approval before command completion.'
     Assert-True (-not $fakeClaudeProcess.HasExited) 'Claude Bash process completed before the working-state assertion.'
 
+    $firstWorkingUpdate = [DateTimeOffset]::Parse([string]$startedState.updatedAt)
+    $heartbeatState = $startedState
+    $heartbeatDeadline = (Get-Date).AddSeconds(4)
+    do {
+        Start-Sleep -Milliseconds 200
+        $candidateState = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+        $heartbeatState = @($candidateState.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-started' })[0]
+    } while ([DateTimeOffset]::Parse([string]$heartbeatState.updatedAt) -le $firstWorkingUpdate -and (Get-Date) -lt $heartbeatDeadline)
+    Assert-True ([DateTimeOffset]::Parse([string]$heartbeatState.updatedAt) -gt $firstWorkingUpdate) 'Long-running Claude Bash process did not refresh its working heartbeat.'
+    Assert-True (-not $fakeClaudeProcess.HasExited) 'Claude Bash process ended before the heartbeat assertion.'
+
     $startedToolResult = [pscustomobject]@{
         type = 'user'
         message = [pscustomobject]@{
@@ -319,6 +345,7 @@ try {
         }
     } | ConvertTo-Json -Depth 10 -Compress
     [System.IO.File]::AppendAllText($startedTranscriptPath, $startedToolResult + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    Assert-True ($directPermissionWatcher.WaitForExit(5000)) 'Permission watcher did not stop after the Bash result was written.'
 
     $output = Invoke-ClaudeHook -EventName 'UserPromptSubmit' -SessionId 'claude-session-2' -PromptId 'claude-turn-2'
     Assert-NoOutput $output 'Second Claude prompt must remain silent.'
@@ -331,6 +358,10 @@ try {
     Write-Host 'Status bridge tests passed for Codex and Claude.' -ForegroundColor Green
 }
 finally {
+    if ($null -ne $directPermissionWatcher -and -not $directPermissionWatcher.HasExited) {
+        $directPermissionWatcher.Kill()
+        $directPermissionWatcher.WaitForExit()
+    }
     if ($null -ne $fakeClaudeProcess -and -not $fakeClaudeProcess.HasExited) {
         $fakeClaudeProcess.Kill()
         $fakeClaudeProcess.WaitForExit()
