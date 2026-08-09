@@ -23,6 +23,7 @@ $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $fakeClaudeProcess = $null
 $directPermissionWatcher = $null
+$directTurnWatcher = $null
 
 function Assert-Equal {
     param($Expected, $Actual, [string]$Message)
@@ -353,6 +354,76 @@ try {
     [System.IO.File]::AppendAllText($startedTranscriptPath, $startedToolResult + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
     Assert-True ($directPermissionWatcher.WaitForExit(5000)) 'Permission watcher did not stop after the Bash result was written.'
 
+    $fetchTranscriptPath = Join-Path $testRoot 'claude-session-web-fetch.jsonl'
+    $fetchPrompt = [pscustomobject]@{
+        type = 'user'
+        promptId = 'claude-turn-web-fetch'
+        message = [pscustomobject]@{ role = 'user'; content = 'fetch a slow page' }
+    } | ConvertTo-Json -Depth 10 -Compress
+    $fetchToolUse = [pscustomobject]@{
+        type = 'assistant'
+        message = [pscustomobject]@{
+            content = @([pscustomobject]@{ type = 'tool_use'; id = 'test-web-fetch'; name = 'WebFetch'; input = @{ url = 'https://example.com' } })
+        }
+    } | ConvertTo-Json -Depth 10 -Compress
+    [System.IO.File]::WriteAllText(
+        $fetchTranscriptPath,
+        $fetchPrompt + [Environment]::NewLine + $fetchToolUse + [Environment]::NewLine,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $output = Invoke-ClaudeHook -EventName 'UserPromptSubmit' -SessionId 'claude-session-web-fetch' -PromptId 'claude-turn-web-fetch'
+    Assert-NoOutput $output 'WebFetch Claude prompt must remain silent.'
+    $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    $fetchState = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-web-fetch' })[0]
+    $fetchInitialUpdate = [DateTimeOffset]::Parse([string]$fetchState.updatedAt)
+
+    $turnWatcherReadyPath = Join-Path $testRoot 'turn-watcher.ready'
+    $directTurnWatcher = Start-Process -FilePath $windowsPowerShell `
+        -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+            '-File', "`"$testClaudeTurnWatcher`"",
+            '-SessionId', 'claude-session-web-fetch',
+            '-TranscriptPath', "`"$fetchTranscriptPath`"",
+            '-PromptId', 'claude-turn-web-fetch',
+            '-TimeoutSeconds', '8',
+            '-HeartbeatSeconds', '1',
+            '-ReadyPath', "`"$turnWatcherReadyPath`""
+        ) `
+        -WindowStyle Hidden -PassThru
+    $turnWatcherReadyDeadline = (Get-Date).AddSeconds(5)
+    while (-not (Test-Path -LiteralPath $turnWatcherReadyPath) -and (Get-Date) -lt $turnWatcherReadyDeadline) {
+        Start-Sleep -Milliseconds 100
+    }
+    Assert-True (Test-Path -LiteralPath $turnWatcherReadyPath) 'Turn watcher did not start.'
+
+    $fetchHeartbeatDeadline = (Get-Date).AddSeconds(4)
+    do {
+        Start-Sleep -Milliseconds 200
+        $candidateState = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+        $fetchState = @($candidateState.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-web-fetch' })[0]
+    } while ([DateTimeOffset]::Parse([string]$fetchState.updatedAt) -le $fetchInitialUpdate -and (Get-Date) -lt $fetchHeartbeatDeadline)
+    Assert-Equal 'working' ([string]$fetchState.status) 'Long-running WebFetch should remain working.'
+    Assert-True ([DateTimeOffset]::Parse([string]$fetchState.updatedAt) -gt $fetchInitialUpdate) 'Long-running WebFetch did not refresh its turn heartbeat.'
+
+    $output = Invoke-ClaudeHook -EventName 'PermissionRequest' -SessionId 'claude-session-web-fetch' -PromptId 'claude-turn-web-fetch'
+    Assert-NoOutput $output 'WebFetch permission request must remain silent.'
+    Start-Sleep -Milliseconds 1500
+    $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    $fetchState = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-web-fetch' })[0]
+    Assert-Equal 'approval' ([string]$fetchState.status) 'Turn heartbeat must not overwrite a permission request.'
+
+    $fetchTurnEnd = [pscustomobject]@{ type = 'system'; subtype = 'turn_duration'; durationMs = 3000 } | ConvertTo-Json -Compress
+    [System.IO.File]::AppendAllText($fetchTranscriptPath, $fetchTurnEnd + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    Assert-True ($directTurnWatcher.WaitForExit(5000)) 'Turn watcher did not stop after WebFetch turn completion.'
+
+    $output = Invoke-ClaudeHook -EventName 'UserPromptSubmit' -SessionId 'claude-session-web-fetch' -PromptId 'claude-turn-after-fetch'
+    Assert-NoOutput $output 'Prompt after WebFetch must remain silent.'
+    $output = Invoke-ClaudeHook -EventName 'TurnHeartbeat' -SessionId 'claude-session-web-fetch' -PromptId 'claude-turn-web-fetch'
+    Assert-NoOutput $output 'Stale turn heartbeat must remain silent.'
+    $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    $fetchState = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-web-fetch' })[0]
+    Assert-Equal 'claude-turn-after-fetch' ([string]$fetchState.turnId) 'A stale heartbeat must not replace the current Claude turn.'
+
     $output = Invoke-ClaudeHook -EventName 'UserPromptSubmit' -SessionId 'claude-session-2' -PromptId 'claude-turn-2'
     Assert-NoOutput $output 'Second Claude prompt must remain silent.'
     $output = Invoke-ClaudeHook -EventName 'StopFailure' -SessionId 'claude-session-2' -PromptId 'claude-turn-2'
@@ -364,6 +435,10 @@ try {
     Write-Host 'Status bridge tests passed for Codex and Claude.' -ForegroundColor Green
 }
 finally {
+    if ($null -ne $directTurnWatcher -and -not $directTurnWatcher.HasExited) {
+        $directTurnWatcher.Kill()
+        $directTurnWatcher.WaitForExit()
+    }
     if ($null -ne $directPermissionWatcher -and -not $directPermissionWatcher.HasExited) {
         $directPermissionWatcher.Kill()
         $directPermissionWatcher.WaitForExit()

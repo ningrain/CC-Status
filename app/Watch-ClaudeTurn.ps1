@@ -3,7 +3,9 @@ param(
     [Parameter(Mandatory)][string]$SessionId,
     [Parameter(Mandatory)][string]$TranscriptPath,
     [string]$PromptId = '',
-    [int]$TimeoutSeconds = 1800
+    [int]$TimeoutSeconds = 1800,
+    [int]$HeartbeatSeconds = 30,
+    [string]$ReadyPath = ''
 )
 
 Set-StrictMode -Version 2.0
@@ -12,6 +14,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $bridgePath = Join-Path $PSScriptRoot 'Write-ClaudeStatus.ps1'
 $powershellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(10, $TimeoutSeconds))
+$nextHeartbeatAt = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $HeartbeatSeconds))
 
 function Get-TranscriptMessageText {
     param([object]$Message)
@@ -47,7 +50,26 @@ function Invoke-InterruptedHook {
     $payload | & $powershellPath -NoProfile -ExecutionPolicy Bypass -File $bridgePath | Out-Null
 }
 
+function Invoke-TurnHeartbeat {
+    $payload = [pscustomobject][ordered]@{
+        session_id = $SessionId
+        prompt_id = $PromptId
+        transcript_path = $TranscriptPath
+        hook_event_name = 'TurnHeartbeat'
+        cwd = ''
+    } | ConvertTo-Json -Compress
+    $payload | & $powershellPath -NoProfile -ExecutionPolicy Bypass -File $bridgePath | Out-Null
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ReadyPath)) {
+    try {
+        [System.IO.File]::WriteAllText($ReadyPath, '', [System.Text.UTF8Encoding]::new($false))
+    }
+    catch {}
+}
+
 while ([DateTime]::UtcNow -lt $deadline) {
+    $turnActive = $false
     if (Test-Path -LiteralPath $TranscriptPath -PathType Leaf) {
         $promptSeen = [string]::IsNullOrWhiteSpace($PromptId)
         try {
@@ -80,10 +102,16 @@ while ([DateTime]::UtcNow -lt $deadline) {
                     exit 0
                 }
             }
+            $turnActive = $promptSeen
         }
         catch {
             # Claude can append to the JSONL file while it is being read.
         }
+    }
+    $now = [DateTime]::UtcNow
+    if ($turnActive -and $now -ge $nextHeartbeatAt) {
+        Invoke-TurnHeartbeat
+        $nextHeartbeatAt = $now.AddSeconds([Math]::Max(1, $HeartbeatSeconds))
     }
     Start-Sleep -Milliseconds 250
 }
