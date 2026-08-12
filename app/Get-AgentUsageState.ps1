@@ -107,23 +107,65 @@ function New-AgentUsageFileSummary {
     }
 }
 
+function Read-AgentUsageCompleteText {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [long]$StartOffset = 0
+    )
+
+    $stream = [System.IO.File]::Open(
+        $Path,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::ReadWrite
+    )
+    try {
+        $safeStart = [Math]::Max(0L, [Math]::Min($StartOffset, $stream.Length))
+        $null = $stream.Seek($safeStart, [System.IO.SeekOrigin]::Begin)
+        $available = $stream.Length - $safeStart
+        if ($available -le 0) {
+            return [pscustomobject]@{ text = ''; offset = $safeStart }
+        }
+
+        $buffer = New-Object byte[] ([int]$available)
+        $readTotal = 0
+        while ($readTotal -lt $buffer.Length) {
+            $read = $stream.Read($buffer, $readTotal, $buffer.Length - $readTotal)
+            if ($read -le 0) { break }
+            $readTotal += $read
+        }
+        $lastNewline = -1
+        for ($index = $readTotal - 1; $index -ge 0; $index--) {
+            if ($buffer[$index] -eq 10) {
+                $lastNewline = $index
+                break
+            }
+        }
+        if ($lastNewline -lt 0) {
+            return [pscustomobject]@{ text = ''; offset = $safeStart }
+        }
+        return [pscustomobject]@{
+            text = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $lastNewline + 1)
+            offset = $safeStart + $lastNewline + 1
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
 function Read-CodexUsageFileSummary {
     param(
         [Parameter(Mandatory)][System.IO.FileInfo]$File,
-        [Parameter(Mandatory)][DateTime]$Today
+        [Parameter(Mandatory)][DateTime]$Today,
+        [long]$StartOffset = 0,
+        [object]$ExistingSummary = $null
     )
 
-    $summary = New-AgentUsageFileSummary -Provider 'codex'
-    $stream = $null
+    $summary = if ($null -ne $ExistingSummary) { $ExistingSummary } else { New-AgentUsageFileSummary -Provider 'codex' }
     try {
-        $stream = [System.IO.File]::Open(
-            $File.FullName,
-            [System.IO.FileMode]::Open,
-            [System.IO.FileAccess]::Read,
-            [System.IO.FileShare]::ReadWrite
-        )
-        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $true)
-        while ($null -ne ($line = $reader.ReadLine())) {
+        $chunk = Read-AgentUsageCompleteText -Path $File.FullName -StartOffset $StartOffset
+        foreach ($line in @([string]$chunk.text -split "`r?`n")) {
             if ([string]::IsNullOrWhiteSpace($line) -or $line -notmatch '"token_count"') { continue }
             try { $item = $line | ConvertFrom-Json } catch { continue }
             if ([string](Get-AgentUsageProperty -Object $item -Name 'type') -ne 'event_msg') { continue }
@@ -163,34 +205,26 @@ function Read-CodexUsageFileSummary {
             $null = Add-AgentUsageValue -Totals $summary.totals -Target 'cacheCreated' -Value (Get-AgentUsageProperty -Object $lastUsage -Name 'cache_write_input_tokens')
             if ($totalAdded -or $inputAdded) { $summary.totals.eventCount++ }
         }
-        $reader.Dispose()
-        return $summary
+        return [pscustomobject]@{ summary = $summary; offset = [long]$chunk.offset }
     }
     catch {
-        if ($null -ne $stream) { try { $stream.Dispose() } catch {} }
-        return $summary
+        return [pscustomobject]@{ summary = $summary; offset = $StartOffset }
     }
 }
 
 function Read-ClaudeUsageFileSummary {
     param(
         [Parameter(Mandatory)][System.IO.FileInfo]$File,
-        [Parameter(Mandatory)][DateTime]$Today
+        [Parameter(Mandatory)][DateTime]$Today,
+        [long]$StartOffset = 0,
+        [hashtable]$ExistingSnapshots = $null,
+        [int]$AnonymousIndex = 0
     )
 
-    $summary = New-AgentUsageFileSummary -Provider 'claude'
-    $stream = $null
-    $snapshots = @{}
-    $anonymousIndex = 0
+    $snapshots = if ($null -ne $ExistingSnapshots) { $ExistingSnapshots } else { @{} }
     try {
-        $stream = [System.IO.File]::Open(
-            $File.FullName,
-            [System.IO.FileMode]::Open,
-            [System.IO.FileAccess]::Read,
-            [System.IO.FileShare]::ReadWrite
-        )
-        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $true)
-        while ($null -ne ($line = $reader.ReadLine())) {
+        $chunk = Read-AgentUsageCompleteText -Path $File.FullName -StartOffset $StartOffset
+        foreach ($line in @([string]$chunk.text -split "`r?`n")) {
             if ([string]::IsNullOrWhiteSpace($line) -or $line -notmatch '"assistant"') { continue }
             try { $item = $line | ConvertFrom-Json } catch { continue }
             if ([string](Get-AgentUsageProperty -Object $item -Name 'type') -ne 'assistant') { continue }
@@ -239,7 +273,8 @@ function Read-ClaudeUsageFileSummary {
                 $snapshots[$messageKey] = $candidate
             }
         }
-        $reader.Dispose()
+
+        $summary = New-AgentUsageFileSummary -Provider 'claude'
         foreach ($snapshot in $snapshots.Values) {
             $summary.totals.input += [long]$snapshot.input
             $summary.totals.output += [long]$snapshot.output
@@ -248,11 +283,20 @@ function Read-ClaudeUsageFileSummary {
             $summary.totals.total += [long]$snapshot.input + [long]$snapshot.output + [long]$snapshot.cached + [long]$snapshot.cacheCreated
             $summary.totals.eventCount++
         }
-        return $summary
+        return [pscustomobject]@{
+            summary = $summary
+            offset = [long]$chunk.offset
+            snapshots = $snapshots
+            anonymousIndex = $anonymousIndex
+        }
     }
     catch {
-        if ($null -ne $stream) { try { $stream.Dispose() } catch {} }
-        return $summary
+        return [pscustomobject]@{
+            summary = New-AgentUsageFileSummary -Provider 'claude'
+            offset = $StartOffset
+            snapshots = $snapshots
+            anonymousIndex = $AnonymousIndex
+        }
     }
 }
 
@@ -297,25 +341,43 @@ function Get-AgentUsageState {
     $recentCutoff = $Now.ToLocalTime().Date.AddDays(-8)
     $codex = New-AgentUsageFileSummary -Provider 'codex'
     $claude = New-AgentUsageFileSummary -Provider 'claude'
+    $activeCacheKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
     $codexFiles = @()
     if (Test-Path -LiteralPath $CodexSessionsRoot) {
-        $codexFiles = @(Get-ChildItem -LiteralPath $CodexSessionsRoot -Recurse -Filter 'rollout-*.jsonl' -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.LastWriteTime -ge $recentCutoff })
+        $recentCodexFiles = @(Get-ChildItem -LiteralPath $CodexSessionsRoot -Recurse -Filter 'rollout-*.jsonl' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -ge $recentCutoff } |
+            Sort-Object LastWriteTime -Descending)
+        $codexFiles = @($recentCodexFiles | Where-Object { $_.LastWriteTime -ge $today })
+        if ($recentCodexFiles.Count -gt 0 -and @($codexFiles | Where-Object { $_.FullName -eq $recentCodexFiles[0].FullName }).Count -eq 0) {
+            $codexFiles += $recentCodexFiles[0]
+        }
     }
     foreach ($file in $codexFiles) {
         $cacheKey = 'codex|' + $file.FullName.ToLowerInvariant()
+        $null = $activeCacheKeys.Add($cacheKey)
         $cached = if ($script:AgentUsageFileCache.ContainsKey($cacheKey)) { $script:AgentUsageFileCache[$cacheKey] } else { $null }
         if ($null -ne $cached -and [string]$cached.day -eq $today.ToString('yyyy-MM-dd') -and [long]$cached.length -eq $file.Length -and [long]$cached.lastWriteTicks -eq $file.LastWriteTimeUtc.Ticks) {
             $summary = $cached.summary
         }
         else {
-            $summary = Read-CodexUsageFileSummary -File $file -Today $today
+            $canAppend = $null -ne $cached -and
+                [string]$cached.day -eq $today.ToString('yyyy-MM-dd') -and
+                $null -ne $cached.PSObject.Properties['offset'] -and
+                $file.Length -ge [long]$cached.offset
+            $readResult = if ($canAppend) {
+                Read-CodexUsageFileSummary -File $file -Today $today -StartOffset ([long]$cached.offset) -ExistingSummary $cached.summary
+            }
+            else {
+                Read-CodexUsageFileSummary -File $file -Today $today
+            }
+            $summary = $readResult.summary
             $script:AgentUsageFileCache[$cacheKey] = [pscustomobject]@{
                 day = $today.ToString('yyyy-MM-dd')
                 length = $file.Length
                 lastWriteTicks = $file.LastWriteTimeUtc.Ticks
                 summary = $summary
+                offset = [long]$readResult.offset
             }
         }
         Merge-AgentUsageTotals -Target $codex.totals -Source $summary.totals
@@ -348,24 +410,45 @@ function Get-AgentUsageState {
         $claudeFiles = @()
         if (Test-Path -LiteralPath $ClaudeProjectsRoot) {
             $claudeFiles = @(Get-ChildItem -LiteralPath $ClaudeProjectsRoot -Recurse -Filter '*.jsonl' -File -ErrorAction SilentlyContinue |
-                Where-Object { $_.LastWriteTime -ge $recentCutoff })
+                Where-Object { $_.LastWriteTime -ge $today })
         }
         foreach ($file in $claudeFiles) {
             $cacheKey = 'claude|' + $file.FullName.ToLowerInvariant()
+            $null = $activeCacheKeys.Add($cacheKey)
             $cached = if ($script:AgentUsageFileCache.ContainsKey($cacheKey)) { $script:AgentUsageFileCache[$cacheKey] } else { $null }
             if ($null -ne $cached -and [string]$cached.day -eq $today.ToString('yyyy-MM-dd') -and [long]$cached.length -eq $file.Length -and [long]$cached.lastWriteTicks -eq $file.LastWriteTimeUtc.Ticks) {
                 $summary = $cached.summary
             }
             else {
-                $summary = Read-ClaudeUsageFileSummary -File $file -Today $today
+                $canAppend = $null -ne $cached -and
+                    [string]$cached.day -eq $today.ToString('yyyy-MM-dd') -and
+                    $null -ne $cached.PSObject.Properties['offset'] -and
+                    $null -ne $cached.PSObject.Properties['snapshots'] -and
+                    $file.Length -ge [long]$cached.offset
+                $readResult = if ($canAppend) {
+                    Read-ClaudeUsageFileSummary -File $file -Today $today -StartOffset ([long]$cached.offset) -ExistingSnapshots $cached.snapshots -AnonymousIndex ([int]$cached.anonymousIndex)
+                }
+                else {
+                    Read-ClaudeUsageFileSummary -File $file -Today $today
+                }
+                $summary = $readResult.summary
                 $script:AgentUsageFileCache[$cacheKey] = [pscustomobject]@{
                     day = $today.ToString('yyyy-MM-dd')
                     length = $file.Length
                     lastWriteTicks = $file.LastWriteTimeUtc.Ticks
                     summary = $summary
+                    offset = [long]$readResult.offset
+                    snapshots = $readResult.snapshots
+                    anonymousIndex = [int]$readResult.anonymousIndex
                 }
             }
             Merge-AgentUsageTotals -Target $claude.totals -Source $summary.totals
+        }
+    }
+
+    foreach ($cacheKey in @($script:AgentUsageFileCache.Keys)) {
+        if (-not $activeCacheKeys.Contains([string]$cacheKey)) {
+            $script:AgentUsageFileCache.Remove($cacheKey)
         }
     }
 

@@ -31,6 +31,7 @@ $null = New-Item -ItemType Directory -Path $codexRoot -Force
 $null = New-Item -ItemType Directory -Path $claudeRoot -Force
 
 . (Join-Path $projectRoot 'app\Get-AgentUsageState.ps1')
+$script:AgentUsageFileCache['stale|missing.jsonl'] = [pscustomobject]@{ day = '2026-08-03' }
 
 try {
     $codexLines = @(
@@ -54,6 +55,7 @@ try {
 
     $now = [DateTimeOffset]::Parse('2026-08-04T12:00:00+08:00')
     $usage = Get-AgentUsageState -CodexSessionsRoot (Join-Path $testRoot 'codex') -ClaudeProjectsRoot (Join-Path $testRoot 'claude') -ClaudeSettingsPath $officialSettingsFile -Now $now
+    Assert-Equal $script:AgentUsageFileCache.ContainsKey('stale|missing.jsonl') $false 'Expired usage cache entries should be pruned.'
 
     Assert-Equal $usage.codex.totalTokens 3500 "Codex should sum only today's incremental tokens."
     Assert-Approximately $usage.codex.cachePercent (2100 * 100.0 / 2900) 0.001 'Codex cache ratio mismatch.'
@@ -65,6 +67,21 @@ try {
     Assert-Equal $usage.claude.weeklyRemainingPercent $null 'Claude weekly quota should remain unavailable.'
     Assert-Equal $usage.claude.source 'transcript-official' 'Official Claude should use transcript usage.'
     Assert-Equal $usage.claude.isEstimate $false 'Official Claude transcript usage should not be marked as an estimate.'
+
+    $codexAppend = '{"timestamp":"2026-08-04T14:00:00+08:00","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":500,"input_tokens":400,"output_tokens":100,"cached_input_tokens":200}}}}'
+    [System.IO.File]::AppendAllText($codexFile, $codexAppend + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $incrementalUsage = Get-AgentUsageState -CodexSessionsRoot (Join-Path $testRoot 'codex') -ClaudeProjectsRoot (Join-Path $testRoot 'claude') -ClaudeSettingsPath $officialSettingsFile -Now $now
+    Assert-Equal $incrementalUsage.codex.totalTokens 4000 'Codex appended usage should be parsed incrementally without losing prior totals.'
+
+    $claudeAppend = '{"timestamp":"2026-08-04T14:00:00+08:00","type":"assistant","message":{"id":"message-d","model":"test-model-d","stop_reason":"end_turn","usage":{"input_tokens":300,"output_tokens":75,"cache_read_input_tokens":125,"cache_creation_input_tokens":25}}}'
+    [System.IO.File]::AppendAllText($claudeFile, $claudeAppend + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $incrementalUsage = Get-AgentUsageState -CodexSessionsRoot (Join-Path $testRoot 'codex') -ClaudeProjectsRoot (Join-Path $testRoot 'claude') -ClaudeSettingsPath $officialSettingsFile -Now $now
+    Assert-Equal $incrementalUsage.claude.totalTokens 5825 'Claude appended usage should be parsed incrementally without losing prior snapshots.'
+
+    $claudeSnapshotUpdate = '{"timestamp":"2026-08-04T14:00:01+08:00","type":"assistant","message":{"id":"message-c","model":"test-model-c","stop_reason":"end_turn","usage":{"input_tokens":400,"output_tokens":200,"cache_read_input_tokens":100,"cache_creation_input_tokens":50}}}'
+    [System.IO.File]::AppendAllText($claudeFile, $claudeSnapshotUpdate + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $incrementalUsage = Get-AgentUsageState -CodexSessionsRoot (Join-Path $testRoot 'codex') -ClaudeProjectsRoot (Join-Path $testRoot 'claude') -ClaudeSettingsPath $officialSettingsFile -Now $now
+    Assert-Equal $incrementalUsage.claude.totalTokens 5875 'Claude incremental parsing should replace an older snapshot of the same message.'
 
     $empty = Get-AgentUsageState -CodexSessionsRoot (Join-Path $testRoot 'missing-codex') -ClaudeProjectsRoot (Join-Path $testRoot 'missing-claude') -ClaudeSettingsPath $officialSettingsFile -Now $now
     Assert-Equal $empty.codex.totalTokens $null 'Missing Codex data should not be shown as zero.'

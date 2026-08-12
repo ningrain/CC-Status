@@ -48,6 +48,10 @@ try {
     Assert-Equal $sessions[0].status 'cancelled' 'Aborted rollout state mismatch.'
     Assert-Equal $sessions[0].turnId 'turn-2' 'Aborted turn ID mismatch.'
 
+    $script:CodexRolloutCache['stale-rollout'] = [pscustomobject]@{}
+    $null = @(Get-CodexRolloutSessions -SessionsRoot $testRoot)
+    Assert-Equal $script:CodexRolloutCache.ContainsKey('stale-rollout') $false 'Stale rollout cache entries should be pruned.'
+
     $staleApproval = [pscustomobject]@{
         sessionId = 'session-cli'
         turnId = 'turn-aborted'

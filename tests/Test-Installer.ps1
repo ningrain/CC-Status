@@ -103,6 +103,7 @@ try {
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Write-ClaudeStatus.ps1')) 'Claude bridge file was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Watch-ClaudePermission.ps1')) 'Claude permission watcher was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Watch-ClaudeTurn.ps1')) 'Claude turn watcher was not installed.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Read-ClaudeTranscriptIncremental.ps1')) 'Claude incremental transcript reader was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Get-CodexRolloutState.ps1')) 'Rollout reader was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Get-AgentUsageState.ps1')) 'Agent usage reader was not installed.'
     Assert-True (Test-Path -LiteralPath (Join-Path $installRoot 'Get-CCSwitchUsage.ps1')) 'CC Switch usage reader was not installed.'
@@ -115,7 +116,8 @@ try {
     $installedConfig = Get-Content -LiteralPath $hooksPath -Raw | ConvertFrom-Json
     Assert-True (@($installedConfig.hooks.UserPromptSubmit).Count -eq 1) 'UserPromptSubmit hook was not added.'
     Assert-True (@($installedConfig.hooks.PermissionRequest).Count -eq 1) 'PermissionRequest hook was not added.'
-    Assert-True (@($installedConfig.hooks.PostToolUse).Count -eq 1) 'PostToolUse hook was not added.'
+    $installedCodexPostToolUse = if ($null -ne $installedConfig.hooks.PSObject.Properties['PostToolUse']) { @($installedConfig.hooks.PostToolUse) } else { @() }
+    Assert-True (@($installedCodexPostToolUse | ForEach-Object { @($_.hooks) } | Where-Object { [string]$_.command -match 'Write-Codex\.ps1' }).Count -eq 0) 'Codex PostToolUse status hook should not be installed.'
     Assert-True (@($installedConfig.hooks.Stop).Count -eq 2) 'Existing Stop hook was not preserved.'
     Assert-True (($installedConfig | ConvertTo-Json -Depth 20) -match 'keep-me\.ps1') 'Existing hook content was changed.'
     Assert-True (-not (($installedConfig | ConvertTo-Json -Depth 20) -match 'ExecutionPolicy Bypass')) 'Installed hooks still use ExecutionPolicy Bypass.'
@@ -124,8 +126,10 @@ try {
     $installedClaudeConfig = Get-Content -LiteralPath $claudeSettingsPath -Raw | ConvertFrom-Json
     Assert-True (@($installedClaudeConfig.hooks.UserPromptSubmit).Count -eq 1) 'Claude UserPromptSubmit hook was not added.'
     Assert-True (@($installedClaudeConfig.hooks.PermissionRequest).Count -eq 1) 'Claude PermissionRequest hook was not added.'
-    Assert-True (@($installedClaudeConfig.hooks.PostToolUse).Count -eq 1) 'Claude PostToolUse hook was not added.'
+    $installedClaudePostToolUse = if ($null -ne $installedClaudeConfig.hooks.PSObject.Properties['PostToolUse']) { @($installedClaudeConfig.hooks.PostToolUse) } else { @() }
+    Assert-True (@($installedClaudePostToolUse | ForEach-Object { @($_.hooks) } | Where-Object { [string]$_.command -match 'Write-ClaudeStatus\.ps1' }).Count -eq 0) 'Claude per-tool status hook should not be installed.'
     Assert-True (@($installedClaudeConfig.hooks.PostToolBatch).Count -eq 1) 'Claude PostToolBatch hook was not added.'
+    Assert-True ([bool]$installedClaudeConfig.hooks.PostToolBatch[0].hooks[0].async) 'Claude status hooks should run asynchronously.'
     Assert-True (@($installedClaudeConfig.hooks.Notification).Count -eq 2) 'Claude Notification hooks were not added.'
     Assert-True (($installedClaudeConfig.hooks.Notification | ForEach-Object { [string]$_.matcher }) -contains 'permission_prompt') 'Claude permission notification hook was not added.'
     Assert-True (($installedClaudeConfig.hooks.Notification | ForEach-Object { [string]$_.matcher }) -contains 'idle_prompt') 'Claude idle notification hook was not added.'
@@ -171,6 +175,7 @@ try {
     Assert-True ($packageSource -match 'IconFilename\s*:\s*"\{app\}\\CCStatus\.ico"') 'Desktop shortcut is not explicitly tied to the tray icon file.'
 
     $statusSource = Get-Content -LiteralPath (Join-Path $projectRoot 'app\CCStatus.ps1') -Raw
+    Assert-True ($statusSource -match 'ProcessPriorityClass\]::BelowNormal') 'CC Status does not yield CPU priority to monitored agents.'
     Assert-True ($statusSource -match '\[System\.Windows\.Threading\.Dispatcher\]::Run\(\)') 'CC Status does not keep an independent dispatcher loop alive while hidden.'
     Assert-True (-not ($statusSource -match '\.ShowDialog\(\)')) 'CC Status still uses a modal loop that exits when the window is hidden.'
     Assert-True ($statusSource -match 'Apply-Theme') 'CC Status does not expose theme switching.'
@@ -187,7 +192,7 @@ try {
     Assert-True ($statusSource -match 'function Test-StatusPath') 'CC Status does not tolerate transient path access failures.'
     Assert-True ($statusSource -match 'function Invoke-ConfigurationMaintenance') 'CC Status does not monitor Claude configuration changes.'
     Assert-True ($statusSource -match '\$script:claudeSettingsFingerprint = Get-StatusFileFingerprint -Path \$claudeSettingsPath\s*\$script:claudeSettingsChangedAt = \[DateTimeOffset\]::UtcNow') 'CC Status does not schedule a startup Hook verification after recording the configuration fingerprint.'
-    Assert-True ($statusSource -match '\$timer\.add_Tick\(\{ Invoke-ConfigurationMaintenance; Invoke-StatusRefresh \}\)') 'CC Status timer does not maintain configuration before refreshing.'
+    Assert-True ($statusSource -match '\$script:statusTimer\.add_Tick\(\{ Invoke-ConfigurationMaintenance; Invoke-StatusRefresh \}\)') 'CC Status timer does not maintain configuration before refreshing.'
     Assert-True ($statusSource -match 'Claude settings\.json changed during hook repair') 'CC Status hook repair does not guard against concurrent configuration writes.'
     Assert-True ($statusSource -match "Codex：周限制余\{0\}；今日用量\{1\}；缓存\{2\}；\{3\}") 'Codex usage tooltip does not use the explicit weekly-limit wording.'
     Assert-True ($statusSource -match "Claude：今日用量\{0\}；缓存\{1\}；数据源 \{2\}") 'Claude usage tooltip contains duplicated or unsupported fields.'

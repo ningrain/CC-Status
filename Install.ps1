@@ -19,6 +19,7 @@ $agentBridgePath = Join-Path $InstallRoot 'Write-AgentStatus.ps1'
 $claudeBridgePath = Join-Path $InstallRoot 'Write-ClaudeStatus.ps1'
 $claudePermissionWatcherPath = Join-Path $InstallRoot 'Watch-ClaudePermission.ps1'
 $claudeTurnWatcherPath = Join-Path $InstallRoot 'Watch-ClaudeTurn.ps1'
+$claudeIncrementalReaderPath = Join-Path $InstallRoot 'Read-ClaudeTranscriptIncremental.ps1'
 $rolloutReaderPath = Join-Path $InstallRoot 'Get-CodexRolloutState.ps1'
 $approvalReaderPath = Join-Path $InstallRoot 'Get-CodexApprovalState.ps1'
 $usageReaderPath = Join-Path $InstallRoot 'Get-AgentUsageState.ps1'
@@ -146,6 +147,7 @@ function Add-ClaudeHookGroup {
         shell = 'powershell'
         command = "& '$escapedPath'"
         timeout = 5
+        async = $true
     }
     $groupProperties = [ordered]@{}
     if (-not [string]::IsNullOrWhiteSpace($Matcher)) {
@@ -222,6 +224,7 @@ Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Write-Codex.ps1') -Destination
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Write-ClaudeStatus.ps1') -Destination $claudeBridgePath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Watch-ClaudePermission.ps1') -Destination $claudePermissionWatcherPath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Watch-ClaudeTurn.ps1') -Destination $claudeTurnWatcherPath -Force
+Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Read-ClaudeTranscriptIncremental.ps1') -Destination $claudeIncrementalReaderPath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Get-CodexRolloutState.ps1') -Destination $rolloutReaderPath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Get-CodexApprovalState.ps1') -Destination $approvalReaderPath -Force
 Copy-Item -LiteralPath (Join-Path $sourceAppRoot 'Get-AgentUsageState.ps1') -Destination $usageReaderPath -Force
@@ -231,7 +234,7 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Uninstall.ps1') -Destination $u
 if (Test-Path -LiteralPath $sourceIconPath) {
     Copy-Item -LiteralPath $sourceIconPath -Destination $iconPath -Force
 }
-foreach ($installedScript in @($statusAppPath, $agentBridgePath, $codexBridgePath, $claudeBridgePath, $claudePermissionWatcherPath, $claudeTurnWatcherPath, $rolloutReaderPath, $approvalReaderPath, $usageReaderPath, $ccSwitchUsageReaderPath, $claudeTranscriptReaderPath, $uninstallerPath)) {
+foreach ($installedScript in @($statusAppPath, $agentBridgePath, $codexBridgePath, $claudeBridgePath, $claudePermissionWatcherPath, $claudeTurnWatcherPath, $claudeIncrementalReaderPath, $rolloutReaderPath, $approvalReaderPath, $usageReaderPath, $ccSwitchUsageReaderPath, $claudeTranscriptReaderPath, $uninstallerPath)) {
     Unblock-File -LiteralPath $installedScript -ErrorAction SilentlyContinue
 }
 
@@ -259,7 +262,6 @@ $escapedCodexBridgePath = $codexBridgePath.Replace('"', '\"')
 $codexHookCommand = 'powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "{0}"' -f $escapedCodexBridgePath
 Add-CodexHookGroup -Hooks $codexConfig.hooks -EventName 'UserPromptSubmit' -Command $codexHookCommand
 Add-CodexHookGroup -Hooks $codexConfig.hooks -EventName 'PermissionRequest' -Matcher '.*' -Command $codexHookCommand
-Add-CodexHookGroup -Hooks $codexConfig.hooks -EventName 'PostToolUse' -Matcher '.*' -Command $codexHookCommand
 Add-CodexHookGroup -Hooks $codexConfig.hooks -EventName 'Stop' -Command $codexHookCommand
 Save-JsonAtomic -Value $codexConfig -Path $codexHooksPath
 
@@ -286,8 +288,9 @@ else {
             Set-ObjectProperty -Object $claudeConfig -Name 'hooks' -Value ([pscustomobject]@{})
         }
 
-        $claudeEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch', 'PermissionDenied', 'Notification', 'Stop', 'StopFailure', 'SessionEnd')
-        Remove-ExistingStatusHandlers -Config $claudeConfig -EventNames $claudeEvents
+        $claudeCleanupEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch', 'PermissionDenied', 'Notification', 'Stop', 'StopFailure', 'SessionEnd')
+        $claudeEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolBatch', 'PermissionDenied', 'Notification', 'Stop', 'StopFailure', 'SessionEnd')
+        Remove-ExistingStatusHandlers -Config $claudeConfig -EventNames $claudeCleanupEvents
         foreach ($eventName in $claudeEvents) {
             if ($eventName -eq 'Notification') {
                 Add-ClaudeHookGroup -Hooks $claudeConfig.hooks -EventName $eventName -ScriptPath $claudeBridgePath -Matcher 'permission_prompt'

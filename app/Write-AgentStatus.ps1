@@ -19,7 +19,7 @@ $hookEventName = $null
 $mutex = $null
 $hasMutex = $false
 
-if (Test-Path -LiteralPath $claudeTranscriptStatePath -PathType Leaf) {
+if ($providerName -eq 'claude' -and (Test-Path -LiteralPath $claudeTranscriptStatePath -PathType Leaf)) {
     try { . $claudeTranscriptStatePath } catch {}
 }
 
@@ -91,7 +91,11 @@ function Start-ClaudePermissionWatcher {
         if (-not [string]::IsNullOrWhiteSpace($ToolName)) {
             $argumentList += ('-ToolName "{0}"' -f $ToolName.Replace('"', '\"'))
         }
-        Start-Process -FilePath $powershellPath -ArgumentList ($argumentList -join ' ') -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+        $watcher = Start-Process -FilePath $powershellPath -ArgumentList ($argumentList -join ' ') -WindowStyle Hidden -PassThru -ErrorAction SilentlyContinue
+        if ($null -ne $watcher) {
+            try { $watcher.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal } catch {}
+            $watcher.Dispose()
+        }
     }
     catch {
         # The watcher is only a fallback; never let it affect Claude Code.
@@ -125,7 +129,11 @@ function Start-ClaudeTurnWatcher {
         if (-not [string]::IsNullOrWhiteSpace($PromptId)) {
             $argumentList += ('-PromptId "{0}"' -f $PromptId.Replace('"', '\"'))
         }
-        Start-Process -FilePath $powershellPath -ArgumentList ($argumentList -join ' ') -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+        $watcher = Start-Process -FilePath $powershellPath -ArgumentList ($argumentList -join ' ') -WindowStyle Hidden -PassThru -ErrorAction SilentlyContinue
+        if ($null -ne $watcher) {
+            try { $watcher.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal } catch {}
+            $watcher.Dispose()
+        }
     }
     catch {
         # The watcher is a status fallback and must not affect Claude Code.
@@ -199,7 +207,7 @@ try {
     }
 
     $mutex = [System.Threading.Mutex]::new($false, 'Local\CCStatus-StateLock')
-    $hasMutex = $mutex.WaitOne([TimeSpan]::FromSeconds(5))
+    $hasMutex = $mutex.WaitOne([TimeSpan]::FromSeconds(1))
     if (-not $hasMutex) {
         throw 'Timed out while waiting for the status state lock.'
     }
@@ -263,6 +271,14 @@ try {
         $model = Get-StringProperty -Object $previousSession -Name 'model'
     }
 
+    $storedTranscriptPath = $transcriptPath
+    if ([string]::IsNullOrWhiteSpace($storedTranscriptPath) -and $null -ne $previousSession) {
+        $storedTranscriptPath = Get-StringProperty -Object $previousSession -Name 'transcriptPath'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($storedTranscriptPath) -and $storedTranscriptPath.StartsWith('~\')) {
+        $storedTranscriptPath = Join-Path $env:USERPROFILE $storedTranscriptPath.Substring(2)
+    }
+
     $turnId = if ($providerName -eq 'claude') {
         Get-StringProperty -Object $hook -Name 'prompt_id'
     }
@@ -311,6 +327,9 @@ try {
     }
     if ($providerName -eq 'claude') {
         $sessionState | Add-Member -NotePropertyName surface -NotePropertyValue 'cli'
+        if (-not [string]::IsNullOrWhiteSpace($storedTranscriptPath)) {
+            $sessionState | Add-Member -NotePropertyName transcriptPath -NotePropertyValue $storedTranscriptPath
+        }
     }
     elseif ($null -ne $previousSession -and $null -ne $previousSession.PSObject.Properties['surface']) {
         $sessionState | Add-Member -NotePropertyName surface -NotePropertyValue ([string]$previousSession.surface)
