@@ -11,10 +11,18 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'SilentlyContinue'
 
+try { [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal } catch {}
+
 $bridgePath = Join-Path $PSScriptRoot 'Write-ClaudeStatus.ps1'
+$incrementalReaderPath = Join-Path $PSScriptRoot 'Read-ClaudeTranscriptIncremental.ps1'
 $powershellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(10, $TimeoutSeconds))
 $nextHeartbeatAt = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $HeartbeatSeconds))
+
+if (-not (Test-Path -LiteralPath $incrementalReaderPath -PathType Leaf)) { exit 0 }
+. $incrementalReaderPath
+$cursor = New-ClaudeTranscriptCursor -Path $TranscriptPath
+$promptSeen = [string]::IsNullOrWhiteSpace($PromptId)
 
 function Get-TranscriptMessageText {
     param([object]$Message)
@@ -69,51 +77,36 @@ if (-not [string]::IsNullOrWhiteSpace($ReadyPath)) {
 }
 
 while ([DateTime]::UtcNow -lt $deadline) {
-    $turnActive = $false
-    if (Test-Path -LiteralPath $TranscriptPath -PathType Leaf) {
-        $promptSeen = [string]::IsNullOrWhiteSpace($PromptId)
-        try {
-            foreach ($line in @(Get-Content -LiteralPath $TranscriptPath -Tail 240 -ErrorAction Stop)) {
-                if ([string]::IsNullOrWhiteSpace($line)) { continue }
-                try { $row = $line | ConvertFrom-Json } catch { continue }
-
-                $rowPromptId = if ($null -ne $row.PSObject.Properties['promptId']) { [string]$row.promptId } else { '' }
-                if ([string]$row.type -eq 'user' -and $null -ne $row.PSObject.Properties['message']) {
-                    $text = Get-TranscriptMessageText -Message $row.message
-                    if ($text -match '(?i)Request interrupted by user' -and
-                        ([string]::IsNullOrWhiteSpace($PromptId) -or $rowPromptId -eq $PromptId)) {
-                        Invoke-InterruptedHook
-                        exit 0
-                    }
-
-                    if (-not [string]::IsNullOrWhiteSpace($rowPromptId)) {
-                        if ($rowPromptId -eq $PromptId) {
-                            $promptSeen = $true
-                        }
-                        elseif ($promptSeen -and $text -notmatch '(?i)Request interrupted by user') {
-                            exit 0
-                        }
-                    }
+    foreach ($row in @(Read-ClaudeTranscriptRowsIncremental -Path $TranscriptPath -Cursor $cursor)) {
+        $rowPromptId = if ($null -ne $row.PSObject.Properties['promptId']) { [string]$row.promptId } else { '' }
+        if ([string]$row.type -eq 'user' -and $null -ne $row.PSObject.Properties['message']) {
+            $text = Get-TranscriptMessageText -Message $row.message
+            if ($text -match '(?i)Request interrupted by user' -and
+                ([string]::IsNullOrWhiteSpace($PromptId) -or $rowPromptId -eq $PromptId)) {
+                Invoke-InterruptedHook
+                exit 0
+            }
+            if (-not [string]::IsNullOrWhiteSpace($rowPromptId)) {
+                if ($rowPromptId -eq $PromptId) {
+                    $promptSeen = $true
                 }
-
-                if ($promptSeen -and [string]$row.type -eq 'system' -and
-                    $null -ne $row.PSObject.Properties['subtype'] -and
-                    [string]$row.subtype -eq 'turn_duration') {
+                elseif ($promptSeen -and $text -notmatch '(?i)Request interrupted by user') {
                     exit 0
                 }
             }
-            $turnActive = $promptSeen
         }
-        catch {
-            # Claude can append to the JSONL file while it is being read.
+        if ($promptSeen -and [string]$row.type -eq 'system' -and
+            $null -ne $row.PSObject.Properties['subtype'] -and
+            [string]$row.subtype -eq 'turn_duration') {
+            exit 0
         }
     }
     $now = [DateTime]::UtcNow
-    if ($turnActive -and $now -ge $nextHeartbeatAt) {
+    if ($promptSeen -and $now -ge $nextHeartbeatAt) {
         Invoke-TurnHeartbeat
         $nextHeartbeatAt = $now.AddSeconds([Math]::Max(1, $HeartbeatSeconds))
     }
-    Start-Sleep -Milliseconds 250
+    Start-Sleep -Milliseconds 1000
 }
 
 exit 0

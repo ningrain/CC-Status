@@ -119,9 +119,14 @@ try {
     }
 
     $repaired = [System.IO.File]::ReadAllText($settingsPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
-    foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch', 'PermissionDenied', 'Stop', 'StopFailure', 'SessionEnd', 'Notification')) {
+    foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'PostToolBatch', 'PermissionDenied', 'Stop', 'StopFailure', 'SessionEnd', 'Notification')) {
         if ($null -eq $repaired.hooks.PSObject.Properties[$eventName]) { throw "Hook was not restored: $eventName" }
     }
+    $claudePostToolHandlers = if ($null -ne $repaired.hooks.PSObject.Properties['PostToolUse']) { @($repaired.hooks.PostToolUse | ForEach-Object { @($_.hooks) }) } else { @() }
+    if (@($claudePostToolHandlers | Where-Object { [string]$_.command -match 'Write-ClaudeStatus\.ps1' }).Count -gt 0) { throw 'Claude PostToolUse status hook was not removed.' }
+    $codexRepaired = [System.IO.File]::ReadAllText($codexHooksPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    $codexPostToolHandlers = if ($null -ne $codexRepaired.hooks.PSObject.Properties['PostToolUse']) { @($codexRepaired.hooks.PostToolUse | ForEach-Object { @($_.hooks) }) } else { @() }
+    if (@($codexPostToolHandlers | Where-Object { [string]$_.command -match 'Write-Codex\.ps1' }).Count -gt 0) { throw 'Codex PostToolUse status hook was not removed.' }
 
     $invalidJson = '{"env":'
     Write-TestSettings -Json $invalidJson

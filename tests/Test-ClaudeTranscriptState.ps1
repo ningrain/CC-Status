@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $projectRoot 'app\Get-ClaudeTranscriptState.ps1')
+. (Join-Path $projectRoot 'app\Read-ClaudeTranscriptIncremental.ps1')
 
 function Assert-Equal {
     param($Actual, $Expected, [string]$Message)
@@ -35,8 +36,20 @@ try {
     $rows += '{"type":"user","timestamp":"2026-08-05T00:06:10+08:00","message":"new request"}'
     [System.IO.File]::WriteAllLines($path, $rows, [System.Text.UTF8Encoding]::new($false))
     $session.status = 'working'
+    $script:ClaudeTranscriptInterruptionCache['stale-transcript'] = [pscustomobject]@{}
     $resolved = @(Resolve-ClaudeTranscriptStates -Sessions @($session) -ProjectsRoot $testRoot -Now ([DateTimeOffset]::Parse('2026-08-05T00:06:15+08:00')))
     Assert-Equal $resolved[0].status 'working' 'A new Claude prompt should clear the interrupted marker.'
+    Assert-Equal $script:ClaudeTranscriptInterruptionCache.ContainsKey('stale-transcript') $false 'Stale transcript cache entries should be pruned.'
+
+    $incrementalPath = Join-Path $testRoot 'incremental.jsonl'
+    [System.IO.File]::WriteAllText($incrementalPath, '{"type":"user","message":"first"}' + [Environment]::NewLine + '{"type":"assistant"', [System.Text.UTF8Encoding]::new($false))
+    $cursor = New-ClaudeTranscriptCursor -Path $incrementalPath
+    $incrementalRows = @(Read-ClaudeTranscriptRowsIncremental -Path $incrementalPath -Cursor $cursor)
+    Assert-Equal $incrementalRows.Count 1 'Incremental reader should return only complete JSONL rows.'
+    [System.IO.File]::AppendAllText($incrementalPath, ',"message":"second"}' + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $incrementalRows = @(Read-ClaudeTranscriptRowsIncremental -Path $incrementalPath -Cursor $cursor)
+    Assert-Equal $incrementalRows.Count 1 'Incremental reader should resume from the last complete row.'
+    Assert-Equal ([string]$incrementalRows[0].message) 'second' 'Incremental reader returned the wrong appended row.'
     Write-Host 'Claude transcript state tests passed.' -ForegroundColor Green
 }
 finally {

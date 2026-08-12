@@ -12,20 +12,29 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'SilentlyContinue'
 
+try { [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal } catch {}
+
 $bridgePath = Join-Path $PSScriptRoot 'Write-ClaudeStatus.ps1'
+$incrementalReaderPath = Join-Path $PSScriptRoot 'Read-ClaudeTranscriptIncremental.ps1'
 $powershellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(5, $TimeoutSeconds))
 $targetToolUseId = ''
 $execution = $null
 $executionMissingAt = $null
 $nextHeartbeatAt = [DateTime]::MaxValue
-$nextProcessCheckAt = [DateTime]::MinValue
+$nextProcessCheckAt = if ($ToolName -eq 'Bash') { [DateTime]::MinValue } else { [DateTime]::MaxValue }
+$nextTranscriptCheckAt = [DateTime]::MinValue
 $initialProcessIds = @{}
+
+if (-not (Test-Path -LiteralPath $incrementalReaderPath -PathType Leaf)) { exit 0 }
+. $incrementalReaderPath
+$transcriptCursor = New-ClaudeTranscriptCursor -Path $TranscriptPath
 
 function Get-ProcessSnapshot {
     $snapshot = @{}
     try {
-        foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+        $processFilter = "Name='bash.exe' OR Name='sh.exe' OR Name='cmd.exe' OR Name='powershell.exe' OR Name='pwsh.exe' OR Name='wsl.exe' OR Name='claude.exe' OR Name='node.exe'"
+        foreach ($process in @(Get-CimInstance Win32_Process -Filter $processFilter -ErrorAction SilentlyContinue)) {
             $snapshot[[int]$process.ProcessId] = $process
         }
     }
@@ -62,29 +71,6 @@ function Find-ClaudeShellExecution {
         }
     }
     return $null
-}
-
-function Read-TranscriptRows {
-    param([Parameter(Mandatory)][string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
-    $rows = New-Object System.Collections.ArrayList
-    try {
-        foreach ($line in [System.IO.File]::ReadAllLines($Path, [System.Text.UTF8Encoding]::new($false))) {
-            if ([string]::IsNullOrWhiteSpace($line)) { continue }
-            try {
-                $row = $line | ConvertFrom-Json
-                $null = $rows.Add($row)
-            }
-            catch {
-                # Claude may be writing the final JSONL line while we read it.
-            }
-        }
-    }
-    catch {
-        return @()
-    }
-    return @($rows)
 }
 
 function Get-LatestToolUseId {
@@ -150,7 +136,9 @@ function Invoke-ResolutionHook {
     $payload | & $powershellPath -NoProfile -ExecutionPolicy Bypass -File $bridgePath | Out-Null
 }
 
-$initialProcessIds = Get-ProcessSnapshot
+if ($ToolName -eq 'Bash') {
+    $initialProcessIds = Get-ProcessSnapshot
+}
 if (-not [string]::IsNullOrWhiteSpace($ReadyPath)) {
     try {
         [System.IO.File]::WriteAllText($ReadyPath, '', [System.Text.UTF8Encoding]::new($false))
@@ -159,23 +147,26 @@ if (-not [string]::IsNullOrWhiteSpace($ReadyPath)) {
 }
 
 while ([DateTime]::UtcNow -lt $deadline) {
-    $rows = Read-TranscriptRows -Path $TranscriptPath
-    if ([string]::IsNullOrWhiteSpace($targetToolUseId)) {
-        $targetToolUseId = Get-LatestToolUseId -Rows $rows -ExpectedToolName $ToolName
-    }
-    if (-not [string]::IsNullOrWhiteSpace($targetToolUseId)) {
-        $result = Find-ToolResult -Rows $rows -ToolUseId $targetToolUseId
-        if ($null -ne $result) {
-            $isError = $false
-            if ($null -ne $result.PSObject.Properties['is_error']) {
-                $isError = [bool]$result.is_error
-            }
-            $eventName = if ($isError) { 'PostToolUseFailure' } else { 'PostToolUse' }
-            Invoke-ResolutionHook -EventName $eventName
-            exit 0
-        }
-    }
     $now = [DateTime]::UtcNow
+    if ($now -ge $nextTranscriptCheckAt) {
+        $rows = @(Read-ClaudeTranscriptRowsIncremental -Path $TranscriptPath -Cursor $transcriptCursor)
+        if ([string]::IsNullOrWhiteSpace($targetToolUseId)) {
+            $targetToolUseId = Get-LatestToolUseId -Rows $rows -ExpectedToolName $ToolName
+        }
+        if (-not [string]::IsNullOrWhiteSpace($targetToolUseId)) {
+            $result = Find-ToolResult -Rows $rows -ToolUseId $targetToolUseId
+            if ($null -ne $result) {
+                $isError = $false
+                if ($null -ne $result.PSObject.Properties['is_error']) {
+                    $isError = [bool]$result.is_error
+                }
+                $eventName = if ($isError) { 'PostToolUseFailure' } else { 'PostToolUse' }
+                Invoke-ResolutionHook -EventName $eventName
+                exit 0
+            }
+        }
+        $nextTranscriptCheckAt = $now.AddSeconds(1)
+    }
     if ($now -ge $nextProcessCheckAt) {
         if ($null -eq $execution) {
             $execution = Find-ClaudeShellExecution -InitialProcessIds $initialProcessIds -CurrentProcesses (Get-ProcessSnapshot)
@@ -184,7 +175,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
                 $nextHeartbeatAt = $now.AddSeconds([Math]::Max(1, $HeartbeatSeconds))
                 $deadline = $now.AddSeconds([Math]::Max(10, $ExecutionTimeoutSeconds))
             }
-            $nextProcessCheckAt = $now.AddMilliseconds(250)
+            $nextProcessCheckAt = $now.AddSeconds(2)
         }
         else {
             $claudeAlive = $null -ne (Get-Process -Id ([int]$execution.claudeProcessId) -ErrorAction SilentlyContinue)
@@ -204,10 +195,10 @@ while ([DateTime]::UtcNow -lt $deadline) {
             elseif (($now - $executionMissingAt).TotalSeconds -ge 10) {
                 exit 0
             }
-            $nextProcessCheckAt = $now.AddSeconds(1)
+            $nextProcessCheckAt = $now.AddSeconds(2)
         }
     }
-    Start-Sleep -Milliseconds 150
+    Start-Sleep -Milliseconds 250
 }
 
 exit 0

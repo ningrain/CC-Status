@@ -16,6 +16,20 @@
 
 - 暂无。
 
+## [1.1.5] - 2026-08-12
+
+### 新增
+
+- 暂无。
+
+### 变更
+
+- 优化 Codex 与 Claude 状态采集：日志采用增量解析，轮询和缓存按活动状态自适应，并降低后台 watcher 的进程优先级。
+
+### 修复
+
+- 修复工具并发、长时间 Bash/WebFetch 及持续增长的会话日志可能造成 Agent Hook 堆积或状态提前结束的问题。
+
 ## [1.1.4] - 2026-08-09
 
 ### 新增
@@ -113,7 +127,8 @@
 - 修复瞬时文件访问失败可能导致组件退出的问题。
 - 修复运行中卸载后进程或托盘图标残留的问题。
 
-[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.1.4...HEAD
+[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.1.5...HEAD
+[1.1.5]: https://github.com/ningrain/CC-Status/compare/v1.1.4...v1.1.5
 [1.1.4]: https://github.com/ningrain/CC-Status/compare/72e9b3486d4b42f48e8384ad8bffd216fc72071e...v1.1.4
 [1.1.3]: https://github.com/ningrain/CC-Status/compare/v1.1.2...72e9b3486d4b42f48e8384ad8bffd216fc72071e
 [1.1.2]: https://github.com/ningrain/CC-Status/compare/v1.1.1...v1.1.2

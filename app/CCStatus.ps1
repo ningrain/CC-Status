@@ -4,6 +4,9 @@ param()
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
+# The widget is observational and should always yield CPU time to the agents it monitors.
+try { [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal } catch {}
+
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
@@ -297,10 +300,18 @@ $script:currentOpenProvider = 'codex'
 $script:currentTheme = 'dark'
 $script:soundEnabled = $true
 $script:codexWeeklyTriggered = $false
+$script:brushCache = @{}
 
 function New-Brush {
     param([string]$Color)
-    return [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($Color))
+
+    if ($script:brushCache.ContainsKey($Color)) {
+        return $script:brushCache[$Color]
+    }
+    $brush = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($Color))
+    $brush.Freeze()
+    $script:brushCache[$Color] = $brush
+    return $brush
 }
 
 function Format-Duration {
@@ -561,7 +572,7 @@ function Set-StatusVisual {
     $indicatorIcon.Foreground = $accentBrush
     $indicatorGlow.Fill = New-Brush ($accent -replace '^#', '#33')
 
-    if ($newState -eq 'working') {
+    if ($newState -eq 'working' -and $script:lastAggregateState -ne 'working') {
         $animation = [System.Windows.Media.Animation.DoubleAnimation]::new()
         $animation.From = 0.35
         $animation.To = 1.0
@@ -570,7 +581,7 @@ function Set-StatusVisual {
         $animation.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
         $indicatorGlow.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $animation)
     }
-    else {
+    elseif ($newState -ne 'working') {
         $indicatorGlow.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $null)
         $indicatorGlow.Opacity = 0.85
     }
@@ -607,38 +618,46 @@ function Update-StatusState {
         $window.Activate()
     }
 
-    $usageState = $null
-    if (Get-Command Get-AgentUsageState -ErrorAction SilentlyContinue) {
-        try { $usageState = Get-AgentUsageState } catch {}
+    $now = [DateTimeOffset]::UtcNow
+    if ($now -ge $script:nextUsageRefreshAt -and (Get-Command Get-AgentUsageState -ErrorAction SilentlyContinue)) {
+        try { $script:cachedUsageState = Get-AgentUsageState } catch {}
+        $script:nextUsageRefreshAt = $now.AddSeconds(10)
     }
+    $usageState = $script:cachedUsageState
 
-    $sessions = @()
-    if (Test-StatusPath -Path $statePath) {
-        try {
-            $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
-            $sessions = @($state.sessions)
-        }
-        catch {
-            $sessions = @()
+    $stateFingerprint = Get-StatusFileFingerprint -Path $statePath
+    if ($stateFingerprint -ne $script:stateFingerprint) {
+        $script:stateFingerprint = $stateFingerprint
+        $script:cachedHookSessions = @()
+        if ($stateFingerprint -ne 'missing') {
+            try {
+                $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+                $script:cachedHookSessions = @($state.sessions)
+            }
+            catch {}
         }
     }
+    $sessions = @($script:cachedHookSessions)
 
-    if (Get-Command Get-CodexRolloutSessions -ErrorAction SilentlyContinue) {
+    if ($now -ge $script:nextRolloutRefreshAt -and (Get-Command Get-CodexRolloutSessions -ErrorAction SilentlyContinue)) {
         try {
-            $sessions += @(Get-CodexRolloutSessions)
+            $script:cachedRolloutSessions = @(Get-CodexRolloutSessions)
         }
         catch {}
+        $script:nextRolloutRefreshAt = $now.AddMilliseconds(1500)
     }
-    if (Get-Command Get-CodexLogApprovalSessions -ErrorAction SilentlyContinue) {
+    $sessions += @($script:cachedRolloutSessions)
+    if ($now -ge $script:nextApprovalRefreshAt -and (Get-Command Get-CodexLogApprovalSessions -ErrorAction SilentlyContinue)) {
         try {
-            $sessions += @(Get-CodexLogApprovalSessions)
+            $script:cachedApprovalSessions = @(Get-CodexLogApprovalSessions)
         }
         catch {}
+        $script:nextApprovalRefreshAt = $now.AddSeconds(1)
     }
+    $sessions += @($script:cachedApprovalSessions)
 
     $sessions = @($sessions | ForEach-Object { Normalize-AgentSession -Session $_ })
 
-    $now = [DateTimeOffset]::UtcNow
     if (Get-Command Resolve-CodexSessionStates -ErrorAction SilentlyContinue) {
         $sessions = @(Resolve-CodexSessionStates -Sessions $sessions -Now $now)
     }
@@ -706,6 +725,13 @@ function Update-StatusState {
         }
     }
     Set-UsageVisual -Usage $usageState
+
+    if ($null -ne $script:statusTimer) {
+        $targetInterval = if ($script:lastAggregateState -eq 'idle') { 2000 } else { 1200 }
+        if ($script:statusTimer.Interval.TotalMilliseconds -ne $targetInterval) {
+            $script:statusTimer.Interval = [TimeSpan]::FromMilliseconds($targetInterval)
+        }
+    }
 }
 
 function Invoke-StatusRefresh {
@@ -972,6 +998,7 @@ function Add-ClaudeStatusHook {
         shell = 'powershell'
         command = "& '$escapedPath'"
         timeout = 5
+        async = $true
     }
 
     $groupProperties = [ordered]@{}
@@ -1075,10 +1102,20 @@ function Repair-StatusHooks {
                 Add-HookProperty -Object $config -Name 'hooks' -Value ([pscustomobject]@{})
             }
 
-            $claudeEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch', 'PermissionDenied', 'Stop', 'StopFailure', 'SessionEnd')
+            $claudeCleanupEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch', 'PermissionDenied', 'Stop', 'StopFailure', 'SessionEnd')
+            $claudeEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolBatch', 'PermissionDenied', 'Stop', 'StopFailure', 'SessionEnd')
             $handlersUseCurrentPath = $true
             foreach ($eventName in $claudeEvents) {
-                if (-not (Test-EventHasStatusHandler -Hooks $config.hooks -EventName $eventName -ExpectedScriptPath $claudeBridgePath)) {
+                $groups = if ($null -ne $config.hooks.PSObject.Properties[$eventName]) { @($config.hooks.$eventName) } else { @() }
+                $statusHandlers = @($groups | ForEach-Object { @($_.hooks) } | Where-Object { Test-StatusHandler -Handler $_ })
+                if (-not (Test-EventHasStatusHandler -Hooks $config.hooks -EventName $eventName -ExpectedScriptPath $claudeBridgePath) -or
+                    @($statusHandlers | Where-Object { $null -eq $_.PSObject.Properties['async'] -or -not [bool]$_.async }).Count -gt 0) {
+                    $handlersUseCurrentPath = $false
+                }
+            }
+            foreach ($eventName in @('PostToolUse', 'PostToolUseFailure')) {
+                if ($null -ne $config.hooks.PSObject.Properties[$eventName] -and
+                    @($config.hooks.$eventName | ForEach-Object { @($_.hooks) } | Where-Object { Test-StatusHandler -Handler $_ }).Count -gt 0) {
                     $handlersUseCurrentPath = $false
                 }
             }
@@ -1086,11 +1123,20 @@ function Repair-StatusHooks {
                 if (-not (Test-NotificationMatcherHandler -Hooks $config.hooks -Matcher $matcher -ExpectedScriptPath $claudeBridgePath)) {
                     $handlersUseCurrentPath = $false
                 }
+                elseif ($null -ne $config.hooks.PSObject.Properties['Notification']) {
+                    $matchingStatusHandlers = @($config.hooks.Notification |
+                        Where-Object { [string]$_.matcher -eq $matcher } |
+                        ForEach-Object { @($_.hooks) } |
+                        Where-Object { Test-StatusHandler -Handler $_ })
+                    if (@($matchingStatusHandlers | Where-Object { $null -eq $_.PSObject.Properties['async'] -or -not [bool]$_.async }).Count -gt 0) {
+                        $handlersUseCurrentPath = $false
+                    }
+                }
             }
 
             $changed = -not $handlersUseCurrentPath
             if ($changed) {
-                Remove-StatusHandlersFromEvents -Hooks $config.hooks -EventNames @($claudeEvents + 'Notification')
+                Remove-StatusHandlersFromEvents -Hooks $config.hooks -EventNames @($claudeCleanupEvents + 'Notification')
                 foreach ($eventName in $claudeEvents) {
                     Add-ClaudeStatusHook -Hooks $config.hooks -EventName $eventName -ScriptPath $claudeBridgePath
                 }
@@ -1127,19 +1173,24 @@ function Repair-StatusHooks {
             $escapedCodexBridgePath = $codexBridgePath.Replace('"', '\"')
             $codexHookCommand = 'powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "{0}"' -f $escapedCodexBridgePath
 
-            $codexEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop')
+            $codexCleanupEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop')
+            $codexEvents = @('UserPromptSubmit', 'PermissionRequest', 'Stop')
             $handlersUseCurrentPath = $true
             foreach ($eventName in $codexEvents) {
                 if (-not (Test-EventHasStatusHandler -Hooks $config.hooks -EventName $eventName -ExpectedScriptPath $codexBridgePath)) {
                     $handlersUseCurrentPath = $false
                 }
             }
+            if ($null -ne $config.hooks.PSObject.Properties['PostToolUse'] -and
+                @($config.hooks.PostToolUse | ForEach-Object { @($_.hooks) } | Where-Object { Test-StatusHandler -Handler $_ }).Count -gt 0) {
+                $handlersUseCurrentPath = $false
+            }
 
             $changed = -not $handlersUseCurrentPath
             if ($changed) {
-                Remove-StatusHandlersFromEvents -Hooks $config.hooks -EventNames $codexEvents
+                Remove-StatusHandlersFromEvents -Hooks $config.hooks -EventNames $codexCleanupEvents
                 foreach ($eventName in $codexEvents) {
-                    $matcher = if ($eventName -eq 'PermissionRequest' -or $eventName -eq 'PostToolUse') { '.*' } else { '' }
+                    $matcher = if ($eventName -eq 'PermissionRequest') { '.*' } else { '' }
                     Add-CodexStatusHook -Hooks $config.hooks -EventName $eventName -Matcher $matcher -Command $codexHookCommand
                 }
             }
@@ -1159,6 +1210,15 @@ function Repair-StatusHooks {
 $script:claudeSettingsFingerprint = $null
 $script:claudeSettingsChangedAt = $null
 $script:nextConfigurationCheckAt = [DateTimeOffset]::MinValue
+$script:cachedUsageState = $null
+$script:nextUsageRefreshAt = [DateTimeOffset]::MinValue
+$script:cachedHookSessions = @()
+$script:stateFingerprint = $null
+$script:cachedRolloutSessions = @()
+$script:nextRolloutRefreshAt = [DateTimeOffset]::MinValue
+$script:cachedApprovalSessions = @()
+$script:nextApprovalRefreshAt = [DateTimeOffset]::MinValue
+$script:statusTimer = $null
 
 function Invoke-ConfigurationMaintenance {
     $now = [DateTimeOffset]::UtcNow
@@ -1250,9 +1310,9 @@ $closeButton.add_Click({
     $window.Close()
 })
 
-$timer = New-Object System.Windows.Threading.DispatcherTimer
-$timer.Interval = [TimeSpan]::FromMilliseconds(850)
-$timer.add_Tick({ Invoke-ConfigurationMaintenance; Invoke-StatusRefresh })
+$script:statusTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:statusTimer.Interval = [TimeSpan]::FromMilliseconds(1200)
+$script:statusTimer.add_Tick({ Invoke-ConfigurationMaintenance; Invoke-StatusRefresh })
 
 $window.add_SourceInitialized({ Restore-StatusSettings })
 $window.add_Closing({
@@ -1277,7 +1337,7 @@ $window.add_Closing({
         return
     }
     Save-StatusSettings
-    $timer.Stop()
+    $script:statusTimer.Stop()
     $notifyIcon.Visible = $false
     $notifyIcon.Dispose()
     if ($ownsTrayIcon -and $null -ne $trayIcon) { $trayIcon.Dispose() }
@@ -1293,7 +1353,7 @@ $null = Repair-StatusHooks
 $script:claudeSettingsFingerprint = Get-StatusFileFingerprint -Path $claudeSettingsPath
 $script:claudeSettingsChangedAt = [DateTimeOffset]::UtcNow
 Invoke-StatusRefresh
-$timer.Start()
+$script:statusTimer.Start()
 if (-not $window.IsVisible) { $window.Show() }
 try {
     [System.Windows.Threading.Dispatcher]::Run()

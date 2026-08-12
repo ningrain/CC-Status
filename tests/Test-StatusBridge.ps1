@@ -11,6 +11,7 @@ $sourceClaudeBridge = Join-Path $projectRoot 'app\Write-ClaudeStatus.ps1'
 $sourceClaudeTranscriptState = Join-Path $projectRoot 'app\Get-ClaudeTranscriptState.ps1'
 $sourceClaudePermissionWatcher = Join-Path $projectRoot 'app\Watch-ClaudePermission.ps1'
 $sourceClaudeTurnWatcher = Join-Path $projectRoot 'app\Watch-ClaudeTurn.ps1'
+$sourceClaudeIncrementalReader = Join-Path $projectRoot 'app\Read-ClaudeTranscriptIncremental.ps1'
 $testRoot = Join-Path $PSScriptRoot '.test-status-bridge'
 $testAgentBridge = Join-Path $testRoot 'Write-AgentStatus.ps1'
 $testBridge = Join-Path $testRoot 'Write-Codex.ps1'
@@ -18,6 +19,7 @@ $testClaudeBridge = Join-Path $testRoot 'Write-ClaudeStatus.ps1'
 $testClaudeTranscriptState = Join-Path $testRoot 'Get-ClaudeTranscriptState.ps1'
 $testClaudePermissionWatcher = Join-Path $testRoot 'Watch-ClaudePermission.ps1'
 $testClaudeTurnWatcher = Join-Path $testRoot 'Watch-ClaudeTurn.ps1'
+$testClaudeIncrementalReader = Join-Path $testRoot 'Read-ClaudeTranscriptIncremental.ps1'
 $statePath = Join-Path $testRoot 'data\state.json'
 $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -103,6 +105,7 @@ Copy-Item -LiteralPath $sourceClaudeBridge -Destination $testClaudeBridge
 Copy-Item -LiteralPath $sourceClaudeTranscriptState -Destination $testClaudeTranscriptState
 Copy-Item -LiteralPath $sourceClaudePermissionWatcher -Destination $testClaudePermissionWatcher
 Copy-Item -LiteralPath $sourceClaudeTurnWatcher -Destination $testClaudeTurnWatcher
+Copy-Item -LiteralPath $sourceClaudeIncrementalReader -Destination $testClaudeIncrementalReader
 
 try {
     $output = Invoke-Hook -EventName 'UserPromptSubmit'

@@ -6,6 +6,9 @@ Set-StrictMode -Version 2.0
 if ($null -eq (Get-Variable -Name CodexRolloutCache -Scope Script -ErrorAction SilentlyContinue)) {
     $script:CodexRolloutCache = @{}
 }
+if ($null -eq (Get-Variable -Name CodexRolloutFileListCache -Scope Script -ErrorAction SilentlyContinue)) {
+    $script:CodexRolloutFileListCache = $null
+}
 
 function Read-CodexSharedText {
     param(
@@ -210,19 +213,41 @@ function Get-CodexRolloutSessions {
         [TimeSpan]$MaximumAge = ([TimeSpan]::FromHours(12))
     )
 
-    if (-not (Test-Path -LiteralPath $SessionsRoot)) { return @() }
+    if (-not (Test-Path -LiteralPath $SessionsRoot)) {
+        $script:CodexRolloutCache.Clear()
+        $script:CodexRolloutFileListCache = $null
+        return @()
+    }
 
-    $cutoff = [DateTime]::UtcNow.Subtract($MaximumAge)
-    $files = @(Get-ChildItem -LiteralPath $SessionsRoot -Recurse -Filter 'rollout-*.jsonl' -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.LastWriteTimeUtc -ge $cutoff } |
-        Sort-Object LastWriteTimeUtc -Descending |
-        Select-Object -First $MaximumFiles)
+    $clock = [DateTimeOffset]::UtcNow
+    $cacheKey = $SessionsRoot.ToLowerInvariant()
+    $refreshFileList = $null -eq $script:CodexRolloutFileListCache -or
+        [string]$script:CodexRolloutFileListCache.key -ne $cacheKey -or
+        [DateTimeOffset]$script:CodexRolloutFileListCache.expiresAt -le $clock
+    if ($refreshFileList) {
+        $cutoff = $clock.UtcDateTime.Subtract($MaximumAge)
+        $files = @(Get-ChildItem -LiteralPath $SessionsRoot -Recurse -Filter 'rollout-*.jsonl' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTimeUtc -ge $cutoff } |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First $MaximumFiles)
+        $script:CodexRolloutFileListCache = [pscustomobject]@{
+            key = $cacheKey
+            expiresAt = $clock.AddSeconds(2)
+            files = $files
+        }
+    }
+    else {
+        $files = @($script:CodexRolloutFileListCache.files)
+        foreach ($file in $files) { try { $file.Refresh() } catch {} }
+    }
 
     $sessions = New-Object System.Collections.ArrayList
+    $activeCacheKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($file in $files) {
         try {
             $isLive = Test-CodexRolloutIsLive -Path $file.FullName
             $cacheKey = $file.FullName.ToLowerInvariant()
+            $null = $activeCacheKeys.Add($cacheKey)
             $cached = if ($script:CodexRolloutCache.ContainsKey($cacheKey)) { $script:CodexRolloutCache[$cacheKey] } else { $null }
             if ($null -ne $cached -and [long]$cached.length -eq $file.Length -and [long]$cached.lastWriteTicks -eq $file.LastWriteTimeUtc.Ticks) {
                 if ($null -eq $cached.session.PSObject.Properties['isLive']) {
@@ -342,6 +367,12 @@ function Get-CodexRolloutSessions {
         }
         catch {
             # A partially-written or locked rollout must not interrupt the status app.
+        }
+    }
+
+    foreach ($cacheKey in @($script:CodexRolloutCache.Keys)) {
+        if (-not $activeCacheKeys.Contains([string]$cacheKey)) {
+            $script:CodexRolloutCache.Remove($cacheKey)
         }
     }
 
