@@ -204,6 +204,9 @@ try {
     $validatorSource = Get-Content -LiteralPath (Join-Path $projectRoot 'installer\Validate-Package.ps1') -Raw
     Assert-True ($validatorSource -match 'settingsHashBefore') 'Package validation does not verify user settings preservation.'
     Assert-True ($validatorSource -match "Get-ItemPropertyValue.+InstallLocation") 'Package validation does not reuse the registered installation directory.'
+    Assert-True ($validatorSource -match 'foreach \(\$eventName in @\(''UserPromptSubmit'', ''PermissionRequest'', ''Stop''\)\)') 'Package validation still requires the removed Codex PostToolUse event.'
+    Assert-True ($validatorSource -match 'CC Status PostToolUse handler') 'Package validation does not reject obsolete CC Status PostToolUse handlers.'
+    Assert-True ($validatorSource -match "'Read-ClaudeTranscriptIncremental\.ps1'") 'Package validation does not verify the incremental transcript reader.'
 
     $installedStatusPath = Join-Path $installRoot 'CCStatus.ps1'
     $installedPidPath = Join-Path $installRoot 'data\status.pid'
