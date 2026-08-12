@@ -98,6 +98,7 @@ foreach ($bridgeName in @(
     'Get-AgentUsageState.ps1',
     'Get-CCSwitchUsage.ps1',
     'Get-ClaudeTranscriptState.ps1'
+    'Read-ClaudeTranscriptIncremental.ps1'
 )) {
     $bridgePath = Join-Path $installRoot $bridgeName
     if (-not (Test-Path -LiteralPath $bridgePath)) {
@@ -135,9 +136,18 @@ if (-not (Test-Path -LiteralPath $hooksPath)) {
     Write-Fail "hooks.json 缺失：$hooksPath"
 }
 $hooksText = Get-Content -LiteralPath $hooksPath -Raw
-foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop')) {
+foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'Stop')) {
     if ($hooksText -notmatch ('"' + [regex]::Escape($eventName) + '"')) {
         Write-Fail "hooks.json 缺少事件 $eventName"
+    }
+}
+$hooksConfig = $hooksText | ConvertFrom-Json
+if ($null -ne $hooksConfig.hooks.PSObject.Properties['PostToolUse']) {
+    $statusPostToolHandlers = @($hooksConfig.hooks.PostToolUse |
+        ForEach-Object { @($_.hooks) } |
+        Where-Object { [string]$_.command -match 'Write-Codex\.ps1' })
+    if ($statusPostToolHandlers.Count -gt 0) {
+        Write-Fail 'hooks.json 仍包含 CC Status PostToolUse handler'
     }
 }
 $expectedCommand = Join-Path $installRoot 'Write-Codex.ps1'
@@ -145,7 +155,7 @@ $jsonEscapedCommand = $expectedCommand.Replace('\', '\\')
 if ($hooksText.IndexOf($jsonEscapedCommand, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
     Write-Fail "hooks.json 未指向安装目录脚本：$expectedCommand"
 }
-Write-Pass 'Codex hooks.json 四个事件配置正确'
+Write-Pass 'Codex hooks.json 生命周期事件配置正确，且未启用逐工具 handler'
 
 Write-Step '4/5 检查 Claude Code settings.json（按可用性）'
 $claudeCommand = Get-Command claude -ErrorAction SilentlyContinue
