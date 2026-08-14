@@ -1,5 +1,8 @@
 ﻿[CmdletBinding()]
-param()
+param(
+    [ValidateNotNullOrEmpty()]
+    [string]$InstanceMutexName = 'Local\CCStatus-SingleInstance'
+)
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -136,7 +139,7 @@ function Test-StatusPath {
 }
 
 $createdNew = $false
-$singleInstance = [System.Threading.Mutex]::new($true, 'Local\CCStatus-SingleInstance', [ref]$createdNew)
+$singleInstance = [System.Threading.Mutex]::new($true, $InstanceMutexName, [ref]$createdNew)
 if (-not $createdNew) {
     $singleInstance.Dispose()
     exit 0

@@ -90,8 +90,9 @@ trusted_hash = "sha256:unrelated"
     $oldUserProfile = $env:USERPROFILE
     $env:USERPROFILE = $fakeHome
     try {
+        $testMutexName = 'Local\CCStatus-ConfigurationMaintenance-' + [guid]::NewGuid().ToString('N')
         $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
-            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', (Join-Path $appRoot 'CCStatus.ps1')) `
+            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', (Join-Path $appRoot 'CCStatus.ps1'), '-InstanceMutexName', $testMutexName) `
             -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
     }
     finally {
@@ -177,10 +178,16 @@ catch {
     throw
 }
 finally {
-    if ($null -ne $process -and -not $process.HasExited) {
-        $exitRequestPath = Join-Path $appRoot 'data\exit.request'
-        [System.IO.File]::WriteAllText($exitRequestPath, '', [System.Text.UTF8Encoding]::new($false))
-        if (-not $process.WaitForExit(5000)) { $process.Kill() }
+    if ($null -ne $process) {
+        if (-not $process.HasExited) {
+            $exitRequestPath = Join-Path $appRoot 'data\exit.request'
+            [System.IO.File]::WriteAllText($exitRequestPath, '', [System.Text.UTF8Encoding]::new($false))
+            if (-not $process.WaitForExit(5000)) { $process.Kill() }
+        }
+        # A timed WaitForExit does not guarantee that redirected asynchronous
+        # output has drained. The parameterless call closes those file handles.
+        $process.WaitForExit()
+        $process.Dispose()
     }
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 }
