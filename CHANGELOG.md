@@ -16,6 +16,20 @@
 
 - 暂无。
 
+## [1.1.6] - 2026-08-14
+
+### 新增
+
+- 暂无。
+
+### 变更
+
+- Codex Hook 路径变化时清理对应事件的旧信任记录，由 Codex 重新显示原生 Hook 审核，避免源码版与安装版切换后 Hook 被静默跳过。
+
+### 修复
+
+- 修复 Codex CLI 批准命令后短暂显示“工作中”，随后被旧 PermissionRequest Hook 覆盖并持续停留在“需要批准”的问题。
+
 ## [1.1.5] - 2026-08-12
 
 ### 新增
@@ -127,7 +141,8 @@
 - 修复瞬时文件访问失败可能导致组件退出的问题。
 - 修复运行中卸载后进程或托盘图标残留的问题。
 
-[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.1.5...HEAD
+[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.1.6...HEAD
+[1.1.6]: https://github.com/ningrain/CC-Status/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/ningrain/CC-Status/compare/v1.1.4...v1.1.5
 [1.1.4]: https://github.com/ningrain/CC-Status/compare/72e9b3486d4b42f48e8384ad8bffd216fc72071e...v1.1.4
 [1.1.3]: https://github.com/ningrain/CC-Status/compare/v1.1.2...72e9b3486d4b42f48e8384ad8bffd216fc72071e

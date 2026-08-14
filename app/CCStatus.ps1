@@ -1086,6 +1086,60 @@ function Get-StatusFileFingerprint {
     }
 }
 
+function Get-CodexStatusTrustPrefixes {
+    param(
+        [Parameter(Mandatory)]$Hooks,
+        [Parameter(Mandatory)][string]$HooksPath,
+        [Parameter(Mandatory)][string[]]$EventNames
+    )
+
+    $eventKeys = @{
+        UserPromptSubmit = 'user_prompt_submit'
+        PermissionRequest = 'permission_request'
+        PostToolUse = 'post_tool_use'
+        Stop = 'stop'
+    }
+    $prefixes = New-Object System.Collections.ArrayList
+    foreach ($eventName in $EventNames) {
+        if (-not $eventKeys.ContainsKey($eventName) -or $null -eq $Hooks.PSObject.Properties[$eventName]) { continue }
+        $hasStatusHandler = @($Hooks.$eventName |
+            ForEach-Object { @($_.hooks) } |
+            Where-Object { Test-StatusHandler -Handler $_ }).Count -gt 0
+        if ($hasStatusHandler) {
+            $null = $prefixes.Add(('{0}:{1}:' -f $HooksPath, $eventKeys[$eventName]))
+        }
+    }
+    return @($prefixes)
+}
+
+function Remove-CodexHookTrustState {
+    param(
+        [Parameter(Mandatory)][string]$ConfigPath,
+        [Parameter(Mandatory)][string[]]$KeyPrefixes
+    )
+
+    if ($KeyPrefixes.Count -eq 0 -or -not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { return $false }
+    $sourceFingerprint = Get-StatusFileFingerprint -Path $ConfigPath
+    $text = [System.IO.File]::ReadAllText($ConfigPath, [System.Text.UTF8Encoding]::new($false))
+    $updated = $text
+    foreach ($prefix in $KeyPrefixes) {
+        # Codex identifies trusted hooks by hooks.json path, event and indexes.
+        # Rewriting one event can shift both group and handler indexes, so all
+        # trust entries for that affected event must be reviewed again.
+        $pattern = '(?ms)^[ \t]*\[hooks\.state\.''' + [regex]::Escape($prefix) + '[^'']*''\][ \t]*(?:\r?\n|\z).*?(?=^[ \t]*\[|\z)'
+        $updated = [regex]::Replace($updated, $pattern, '')
+    }
+    if ($updated -eq $text) { return $false }
+    if ((Get-StatusFileFingerprint -Path $ConfigPath) -ne $sourceFingerprint) {
+        throw 'Codex config.toml changed during hook trust migration.'
+    }
+
+    $tempPath = '{0}.repair.tmp' -f $ConfigPath
+    [System.IO.File]::WriteAllText($tempPath, $updated, [System.Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $tempPath -Destination $ConfigPath -Force
+    return $true
+}
+
 function Repair-StatusHooks {
     $claudeBridgePath = Join-Path $appRoot 'Write-ClaudeStatus.ps1'
     $codexBridgePath = Join-Path $appRoot 'Write-Codex.ps1'
@@ -1175,6 +1229,7 @@ function Repair-StatusHooks {
 
             $codexCleanupEvents = @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop')
             $codexEvents = @('UserPromptSubmit', 'PermissionRequest', 'Stop')
+            $staleTrustPrefixes = @(Get-CodexStatusTrustPrefixes -Hooks $config.hooks -HooksPath $codexHooksPath -EventNames $codexCleanupEvents)
             $handlersUseCurrentPath = $true
             foreach ($eventName in $codexEvents) {
                 if (-not (Test-EventHasStatusHandler -Hooks $config.hooks -EventName $eventName -ExpectedScriptPath $codexBridgePath)) {
@@ -1197,6 +1252,10 @@ function Repair-StatusHooks {
 
             if ($changed) {
                 Save-ConfigAtomic -Value $config -Path $codexHooksPath
+                $codexTomlPath = Join-Path $env:USERPROFILE '.codex\config.toml'
+                if (Remove-CodexHookTrustState -ConfigPath $codexTomlPath -KeyPrefixes $staleTrustPrefixes) {
+                    Write-RepairLog "codex hook trust invalidated for review: $codexTomlPath"
+                }
                 Write-RepairLog "codex hooks restored: $codexHooksPath"
             }
         }
