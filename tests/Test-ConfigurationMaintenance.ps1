@@ -13,6 +13,7 @@ $claudeHome = Join-Path $fakeHome '.claude'
 $codexHome = Join-Path $fakeHome '.codex'
 $settingsPath = Join-Path $claudeHome 'settings.json'
 $codexHooksPath = Join-Path $codexHome 'hooks.json'
+$codexTomlPath = Join-Path $codexHome 'config.toml'
 $stdoutPath = Join-Path $testRoot 'cc-status.stdout.log'
 $stderrPath = Join-Path $testRoot 'cc-status.stderr.log'
 $process = $null
@@ -69,6 +70,22 @@ try {
         }
     }
     [System.IO.File]::WriteAllText($codexHooksPath, ($initialCodexConfig | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
+    $oldStatusTrustKey = '{0}:user_prompt_submit:0:0' -f $codexHooksPath
+    $customTrustKey = '{0}:user_prompt_submit:0:1' -f $codexHooksPath
+    $unrelatedTrustKey = '{0}:session_start:0:0' -f $codexHooksPath
+    $initialCodexToml = @"
+[hooks.state]
+
+[hooks.state.'$oldStatusTrustKey']
+trusted_hash = "sha256:old-status"
+
+[hooks.state.'$customTrustKey']
+trusted_hash = "sha256:custom-same-event"
+
+[hooks.state.'$unrelatedTrustKey']
+trusted_hash = "sha256:unrelated"
+"@
+    [System.IO.File]::WriteAllText($codexTomlPath, $initialCodexToml, [System.Text.UTF8Encoding]::new($false))
 
     $oldUserProfile = $env:USERPROFILE
     $env:USERPROFILE = $fakeHome
@@ -89,6 +106,7 @@ try {
         try {
             $config = [System.IO.File]::ReadAllText($settingsPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
             $codexConfig = [System.IO.File]::ReadAllText($codexHooksPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+            $codexToml = [System.IO.File]::ReadAllText($codexTomlPath, [System.Text.UTF8Encoding]::new($false))
             $claudeCommands = @($config.hooks.UserPromptSubmit | ForEach-Object { @($_.hooks) } | ForEach-Object { $_.command })
             $codexCommands = @($codexConfig.hooks.UserPromptSubmit | ForEach-Object { @($_.hooks) } | ForEach-Object { $_.command })
             return $config.customMarker -eq 'initial' -and
@@ -100,7 +118,10 @@ try {
                 $codexConfig.customMarker -eq 'codex-preserve' -and
                 @($codexCommands | Where-Object { $_ -eq 'custom-codex-hook' }).Count -eq 1 -and
                 @($codexCommands | Where-Object { $_ -like "*$appRoot\Write-Codex.ps1*" }).Count -eq 1 -and
-                @($codexCommands | Where-Object { $_ -like "*$oldCodexPath*" }).Count -eq 0
+                @($codexCommands | Where-Object { $_ -like "*$oldCodexPath*" }).Count -eq 0 -and
+                $codexToml -notmatch [regex]::Escape($oldStatusTrustKey) -and
+                $codexToml -notmatch [regex]::Escape($customTrustKey) -and
+                $codexToml -match [regex]::Escape($unrelatedTrustKey)
         }
         catch { return $false }
     }

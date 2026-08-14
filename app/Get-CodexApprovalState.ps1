@@ -170,34 +170,50 @@ function Update-CodexApprovalStates {
             continue
         }
 
-        # An explicit approval response means the tool is about to execute. Keep
-        # the rollout as the liveness authority, but publish a newer working state
-        # so the UI does not remain stuck on approval until the tool returns.
+        # Codex builds can emit PermissionRequest only through the hook while the
+        # SQLite log starts with the approval response. Treat an explicit response
+        # as authoritative even when no matching request row was observed.
+        $isDenied = [string]$row.Body -match '(?i)\b(denied|rejected|declined|canceled|cancelled)\b'
+        $isApprovalResponse =
+            [string]$row.Target -eq 'codex_core::session::handlers' -and
+            [string]$row.Body -match 'op:\s*(ExecApproval|RequestPermissionsResponse)'
+        if ($isApprovalResponse) {
+            if ($isDenied) {
+                $script:CodexApprovalDeniedThreads[$identity.threadId] = [DateTimeOffset]::UtcNow
+                $script:CodexApprovalStates.Remove($identity.threadId)
+            }
+            else {
+                $timestamp = [DateTimeOffset]::FromUnixTimeSeconds([long]$row.Timestamp).ToString('o')
+                $existing = if ($script:CodexApprovalStates.ContainsKey($identity.threadId)) { $script:CodexApprovalStates[$identity.threadId] } else { $null }
+                $sameTurn = $null -ne $existing -and (
+                    [string]::IsNullOrWhiteSpace([string]$identity.turnId) -or
+                    [string]$existing.turnId -eq [string]$identity.turnId
+                )
+                $script:CodexApprovalStates[$identity.threadId] = [pscustomobject][ordered]@{
+                    provider = 'codex'
+                    sessionId = $identity.threadId
+                    turnId = if (-not [string]::IsNullOrWhiteSpace([string]$identity.turnId)) { [string]$identity.turnId } elseif ($sameTurn) { [string]$existing.turnId } else { '' }
+                    status = 'working'
+                    startedAt = if ($sameTurn) { [string]$existing.startedAt } else { $timestamp }
+                    updatedAt = $timestamp
+                    cwd = if ($sameTurn) { [string]$existing.cwd } else { '' }
+                    model = if ($sameTurn) { [string]$existing.model } else { '' }
+                    source = 'app-log'
+                }
+            }
+            continue
+        }
+
         if ($script:CodexApprovalStates.ContainsKey($identity.threadId)) {
             $existing = $script:CodexApprovalStates[$identity.threadId]
             $identityTurn = [string]$identity.turnId
             if ([string]::IsNullOrWhiteSpace($identityTurn) -or [string]$existing.turnId -eq $identityTurn) {
-                $isDenied = [string]$row.Body -match '(?i)\b(denied|rejected|declined|canceled|cancelled)\b'
-                $isApprovalResponse =
-                    [string]$row.Target -eq 'codex_core::session::handlers' -and
-                    [string]$row.Body -match 'op:\s*(ExecApproval|RequestPermissionsResponse)'
-                if ($isDenied) {
-                    $script:CodexApprovalDeniedThreads[$identity.threadId] = [DateTimeOffset]::UtcNow
-                    $script:CodexApprovalStates.Remove($identity.threadId)
-                }
-                elseif ($isApprovalResponse) {
-                    $timestamp = [DateTimeOffset]::FromUnixTimeSeconds([long]$row.Timestamp).ToString('o')
-                    $script:CodexApprovalStates[$identity.threadId] = [pscustomobject][ordered]@{
-                        provider = 'codex'
-                        sessionId = $identity.threadId
-                        turnId = [string]$existing.turnId
-                        status = 'working'
-                        startedAt = [string]$existing.startedAt
-                        updatedAt = $timestamp
-                        cwd = [string]$existing.cwd
-                        model = [string]$existing.model
-                        source = 'app-log'
-                    }
+                if ([string]$existing.status -eq 'working' -and [string]$row.Target -eq 'codex_core::tools::parallel') {
+                    # The approved tool has returned, but the agent turn is still
+                    # active until its rollout emits task_complete/turn_aborted.
+                    # Keep a newer working record so the older PermissionRequest
+                    # hook cannot become authoritative again in the meantime.
+                    $existing.updatedAt = [DateTimeOffset]::FromUnixTimeSeconds([long]$row.Timestamp).ToString('o')
                 }
                 else {
                     $script:CodexApprovalStates.Remove($identity.threadId)
