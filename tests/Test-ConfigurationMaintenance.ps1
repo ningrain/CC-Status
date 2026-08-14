@@ -102,7 +102,9 @@ trusted_hash = "sha256:unrelated"
         (Test-Path -LiteralPath (Join-Path $appRoot 'data\status.pid')) -and -not $process.HasExited
     }
 
-    Wait-ForCondition -FailureMessage 'Temporary CC Status did not finish its initial Hook setup.' -Condition {
+    # Loading WPF and starting the background repair loop is noticeably slower
+    # on a fresh GitHub Windows runner than on a warmed local machine.
+    Wait-ForCondition -TimeoutSeconds 30 -FailureMessage 'Temporary CC Status did not finish its initial Hook setup.' -Condition {
         try {
             $config = [System.IO.File]::ReadAllText($settingsPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
             $codexConfig = [System.IO.File]::ReadAllText($codexHooksPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
@@ -169,6 +171,9 @@ trusted_hash = "sha256:unrelated"
 catch {
     if (Test-Path -LiteralPath $stdoutPath) { Get-Content -LiteralPath $stdoutPath }
     if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath | Write-Error }
+    $repairLogPath = Join-Path $appRoot 'data\hook-repair.log'
+    if (Test-Path -LiteralPath $repairLogPath) { Get-Content -LiteralPath $repairLogPath }
+    if ($null -ne $process) { Write-Host "Temporary CC Status exited: $($process.HasExited)" }
     throw
 }
 finally {
