@@ -18,7 +18,8 @@ $tests = @(
 )
 
 $previousModuleCachePath = $env:PSModuleAnalysisCachePath
-$moduleCachePath = Join-Path ([System.IO.Path]::GetTempPath()) ('cc-status-module-analysis-' + [guid]::NewGuid().ToString('N') + '.cache')
+$moduleCacheRoot = if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { [System.IO.Path]::GetTempPath() } else { $env:LOCALAPPDATA }
+$moduleCachePath = Join-Path $moduleCacheRoot 'Microsoft\Windows\PowerShell\ModuleAnalysisCache'
 $env:PSModuleAnalysisCachePath = $moduleCachePath
 try {
     foreach ($testName in $tests) {
@@ -32,7 +33,6 @@ try {
 }
 finally {
     $env:PSModuleAnalysisCachePath = $previousModuleCachePath
-    Remove-Item -LiteralPath $moduleCachePath -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host '[Tests] ALL PASS' -ForegroundColor Green

@@ -178,10 +178,16 @@ catch {
     throw
 }
 finally {
-    if ($null -ne $process -and -not $process.HasExited) {
-        $exitRequestPath = Join-Path $appRoot 'data\exit.request'
-        [System.IO.File]::WriteAllText($exitRequestPath, '', [System.Text.UTF8Encoding]::new($false))
-        if (-not $process.WaitForExit(5000)) { $process.Kill() }
+    if ($null -ne $process) {
+        if (-not $process.HasExited) {
+            $exitRequestPath = Join-Path $appRoot 'data\exit.request'
+            [System.IO.File]::WriteAllText($exitRequestPath, '', [System.Text.UTF8Encoding]::new($false))
+            if (-not $process.WaitForExit(5000)) { $process.Kill() }
+        }
+        # A timed WaitForExit does not guarantee that redirected asynchronous
+        # output has drained. The parameterless call closes those file handles.
+        $process.WaitForExit()
+        $process.Dispose()
     }
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 }
