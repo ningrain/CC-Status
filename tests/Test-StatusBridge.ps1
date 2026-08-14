@@ -119,11 +119,6 @@ try {
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
     Assert-Equal 'approval' $state.sessions[0].status 'Permission request should set approval state.'
 
-    $output = Invoke-Hook -EventName 'PostToolUse'
-    Assert-NoOutput $output 'PostToolUse must not write model-visible output.'
-    $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
-    Assert-Equal 'working' $state.sessions[0].status 'Tool completion should restore working state.'
-
     $output = Invoke-Hook -EventName 'Stop'
     Assert-Equal '{"continue":true}' ([string]$output) 'Stop must return valid non-blocking JSON.'
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
@@ -194,8 +189,8 @@ try {
     $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-1' })[0]
     Assert-Equal 'working' ([string]$claudeSession.status) 'Claude Bash execution start should restore working state before completion.'
 
-    $output = Invoke-ClaudeHook -EventName 'PostToolUse' -PromptId 'claude-turn-1'
-    Assert-NoOutput $output 'Claude PostToolUse must not write model-visible output.'
+    $output = Invoke-ClaudeHook -EventName 'PostToolBatch' -PromptId 'claude-turn-1'
+    Assert-NoOutput $output 'Claude PostToolBatch must not write model-visible output.'
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
     $claudeSession = @($state.sessions | Where-Object { $_.provider -eq 'claude' -and $_.sessionId -eq 'claude-session-1' })[0]
     Assert-Equal 'working' ([string]$claudeSession.status) 'Claude tool completion should restore working state.'

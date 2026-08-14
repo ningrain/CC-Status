@@ -12,17 +12,27 @@ $tests = @(
     'Test-ApprovalMonitor.ps1',
     'Test-ClaudeTranscriptState.ps1',
     'Test-AgentUsage.ps1',
+    'Test-ApplicationContract.ps1',
     'Test-ConfigurationMaintenance.ps1',
     'Test-Installer.ps1'
 )
 
-foreach ($testName in $tests) {
-    $testPath = Join-Path $PSScriptRoot $testName
-    Write-Host "[Tests] $testName" -ForegroundColor Cyan
-    & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File $testPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "$testName failed with exit code $LASTEXITCODE"
+$previousModuleCachePath = $env:PSModuleAnalysisCachePath
+$moduleCachePath = Join-Path ([System.IO.Path]::GetTempPath()) ('cc-status-module-analysis-' + [guid]::NewGuid().ToString('N') + '.cache')
+$env:PSModuleAnalysisCachePath = $moduleCachePath
+try {
+    foreach ($testName in $tests) {
+        $testPath = Join-Path $PSScriptRoot $testName
+        Write-Host "[Tests] $testName" -ForegroundColor Cyan
+        & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File $testPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "$testName failed with exit code $LASTEXITCODE"
+        }
     }
+}
+finally {
+    $env:PSModuleAnalysisCachePath = $previousModuleCachePath
+    Remove-Item -LiteralPath $moduleCachePath -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host '[Tests] ALL PASS' -ForegroundColor Green

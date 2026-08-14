@@ -90,8 +90,9 @@ trusted_hash = "sha256:unrelated"
     $oldUserProfile = $env:USERPROFILE
     $env:USERPROFILE = $fakeHome
     try {
+        $testMutexName = 'Local\CCStatus-ConfigurationMaintenance-' + [guid]::NewGuid().ToString('N')
         $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
-            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', (Join-Path $appRoot 'CCStatus.ps1')) `
+            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', (Join-Path $appRoot 'CCStatus.ps1'), '-InstanceMutexName', $testMutexName) `
             -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
     }
     finally {
