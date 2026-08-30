@@ -41,9 +41,9 @@ CC Status 通过 Codex 与 Claude Code 的本地生命周期事件显示状态�
 
 ### 用量信息
 
-组件右侧分别显示 Codex 和 Claude 的用量。Codex 行中的 `余` 表示 7 天限额剩余比例，`今` 表示本地当天 Token 用量，`缓` 表示缓存命中比例；Claude 行只显示 `今` 和 `缓`，因为当前无法取得 Claude 的 7 天限额。无法取得的数据统一显示 `-`。
+组件右侧分别显示 Codex 和 Claude 的用量。Codex 行按顺序显示 `5h:剩余比例`、`7d:剩余比例`、本地当天 Token 用量和缓存命中比例；Claude 行依次显示本地当天 Token 用量和缓存命中比例，因为当前无法取得 Claude 的限额。无法取得的数据统一显示 `-`，完整字段说明可通过鼠标悬停查看。
 
-- Codex：读取 `%USERPROFILE%\.codex\sessions` 下的本地 rollout 记录。当天 Token 使用增量和缓存 Token 来自 `token_count` 事件；7 天剩余额度来自同一事件中 10080 分钟窗口的限额数据。
+- Codex：读取 `%USERPROFILE%\.codex\sessions` 下的本地 rollout 记录。当天 Token 使用增量和缓存 Token 来自 `token_count` 事件；5 小时和 7 天剩余额度分别来自同一事件中的 300、10080 分钟窗口，兼容旧日志将 7 天窗口放在 `primary` 中的格式。
 - 官方 Claude：读取 `%USERPROFILE%\.claude\projects` 下的本地 transcript，按消息 ID 去重后统计当天输入、输出、缓存读取和缓存创建 Token。
 - CC Switch 管理的 Claude 自定义接入：只读查询 `%USERPROFILE%\.cc-switch\cc-switch.db` 中当天成功请求的用量记录，汇总 proxy 与 session log 数据；查询结果缓存 30 秒，避免频繁访问数据库。数据库不可用时回退到本地 transcript 估算。CC Switch 改写 Claude 配置后，CC Status 会自动补回缺失的状态 Hooks，无需重启。
 

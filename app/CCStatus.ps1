@@ -197,9 +197,9 @@ $xaml = @"
                         </Grid.ColumnDefinitions>
                         <TextBlock x:Name="StatusText" Grid.Column="0" Text="无任务" Foreground="#FFFFFF" FontSize="26" FontWeight="SemiBold" VerticalAlignment="Center" />
                         <StackPanel Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center">
-                            <TextBlock x:Name="CodexUsageText" Text="Codex 余- 今- 缓-" Foreground="#BBC5D1" FontSize="11" Margin="0,0,0,0"
+                            <TextBlock x:Name="CodexUsageText" Text="Codex 5h:- 7d:- - -" Foreground="#BBC5D1" FontSize="11" Margin="0,0,0,0"
                                        TextTrimming="CharacterEllipsis" />
-                            <TextBlock x:Name="ClaudeUsageText" Text="Claude 今- 缓-" Foreground="#BBC5D1" FontSize="11" Margin="0,0,0,0"
+                            <TextBlock x:Name="ClaudeUsageText" Text="Claude - -" Foreground="#BBC5D1" FontSize="11" Margin="0,0,0,0"
                                        TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                     </Grid>
@@ -445,18 +445,24 @@ function Set-UsageVisual {
 
     $codex = if ($null -ne $Usage -and $null -ne $Usage.PSObject.Properties['codex']) { $Usage.codex } else { $null }
     $claude = if ($null -ne $Usage -and $null -ne $Usage.PSObject.Properties['claude']) { $Usage.claude } else { $null }
+    $codexFiveHour = if ($script:codexWeeklyTriggered -and $null -ne $codex) { $codex.fiveHourRemainingPercent } else { $null }
     $codexWeekly = if ($script:codexWeeklyTriggered -and $null -ne $codex) { $codex.weeklyRemainingPercent } else { $null }
     $codexTokens = if ($null -ne $codex) { $codex.totalTokens } else { $null }
     $codexCache = if ($null -ne $codex) { $codex.cachePercent } else { $null }
     $claudeTokens = if ($null -ne $claude) { $claude.totalTokens } else { $null }
     $claudeCache = if ($null -ne $claude) { $claude.cachePercent } else { $null }
-    $codexLine = 'Codex 余{0} 今{1} 缓{2}' -f (Format-UsagePercent $codexWeekly), (Format-UsageTokens $codexTokens), (Format-UsagePercent $codexCache)
-    $claudeLine = 'Claude 今{0} 缓{1}' -f (Format-UsageTokens $claudeTokens), (Format-UsagePercent -Value $claudeCache -Decimals 1)
+    $codexLine = 'Codex 5h:{0} 7d:{1} {2} {3}' -f `
+        (Format-UsagePercent $codexFiveHour), (Format-UsagePercent $codexWeekly), (Format-UsageTokens $codexTokens), (Format-UsagePercent $codexCache)
+    $claudeLine = 'Claude {0} {1}' -f (Format-UsageTokens $claudeTokens), (Format-UsagePercent -Value $claudeCache -Decimals 1)
     $codexUsageText.Text = $codexLine
     $claudeUsageText.Text = $claudeLine
-    $codexReset = if ($script:codexWeeklyTriggered -and $null -ne $codex) { Format-UsageResetTime $codex.weeklyResetAt } else { '-' }
-    $codexUsageText.ToolTip = 'Codex：周限制余{0}；今日用量{1}；缓存{2}；{3}' -f `
-        (Format-UsagePercent $codexWeekly), (Format-UsageTokens $codexTokens), (Format-UsagePercent $codexCache), $codexReset
+    $codexFiveHourReset = if ($script:codexWeeklyTriggered -and $null -ne $codex) { Format-UsageResetTime $codex.fiveHourResetAt } else { '-' }
+    $codexWeeklyReset = if ($script:codexWeeklyTriggered -and $null -ne $codex) { Format-UsageResetTime $codex.weeklyResetAt } else { '-' }
+    $codexUsageText.ToolTip = @(
+        ('Codex：今日用量{0}；缓存命中率{1}' -f (Format-UsageTokens $codexTokens), (Format-UsagePercent $codexCache))
+        ('5h余{0}（{1}）；7d余{2}（{3}）' -f `
+            (Format-UsagePercent $codexFiveHour), $codexFiveHourReset, (Format-UsagePercent $codexWeekly), $codexWeeklyReset)
+    ) -join [Environment]::NewLine
     $claudeSource = if ($null -ne $claude -and $null -ne $claude.PSObject.Properties['source']) { [string]$claude.source } else { '' }
     $claudeSourceLabel = switch ($claudeSource) {
         'cc-switch-proxy' { 'CC Switch 代理统计' }
@@ -466,8 +472,11 @@ function Set-UsageVisual {
         'transcript-estimate' { 'Claude 日志估算' }
         default { '暂无来源' }
     }
-    $claudeUsageText.ToolTip = 'Claude：今日用量{0}；缓存{1}；数据源 {2}' -f `
-        (Format-UsageTokens $claudeTokens), (Format-UsagePercent -Value $claudeCache -Decimals 1), $claudeSourceLabel
+    $claudeUsageText.ToolTip = @(
+        ('Claude：今日用量{0}；缓存命中率{1}' -f `
+            (Format-UsageTokens $claudeTokens), (Format-UsagePercent -Value $claudeCache -Decimals 1))
+        ('数据源 {0}' -f $claudeSourceLabel)
+    ) -join [Environment]::NewLine
 }
 
 function Normalize-AgentSession {

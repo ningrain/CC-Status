@@ -16,6 +16,21 @@
 
 - 暂无。
 
+## [1.1.7] - 2026-08-30
+
+### 新增
+
+- Codex 用量同时展示 5 小时和 7 天限额的剩余比例与重置时间，并兼容旧版单一 7 天窗口日志。
+
+### 变更
+
+- 压缩 Codex 与 Claude 的主界面用量文案，避免较长数据被截断。
+- 用量悬停信息调整为两行，第一行展示今日用量和缓存命中率，第二行展示限额或数据源。
+
+### 修复
+
+- 暂无。
+
 ## [1.1.6] - 2026-08-14
 
 ### 新增
@@ -141,7 +156,8 @@
 - 修复瞬时文件访问失败可能导致组件退出的问题。
 - 修复运行中卸载后进程或托盘图标残留的问题。
 
-[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.1.6...HEAD
+[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.1.7...HEAD
+[1.1.7]: https://github.com/ningrain/CC-Status/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/ningrain/CC-Status/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/ningrain/CC-Status/compare/v1.1.4...v1.1.5
 [1.1.4]: https://github.com/ningrain/CC-Status/compare/72e9b3486d4b42f48e8384ad8bffd216fc72071e...v1.1.4

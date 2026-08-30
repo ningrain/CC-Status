@@ -102,6 +102,8 @@ function New-AgentUsageFileSummary {
     return [pscustomobject][ordered]@{
         provider = $Provider
         totals = New-AgentUsageTotals
+        latestFiveHourRate = $null
+        latestFiveHourRateAt = $null
         latestWeeklyRate = $null
         latestWeeklyRateAt = $null
     }
@@ -178,16 +180,26 @@ function Read-CodexUsageFileSummary {
             $info = Get-AgentUsageProperty -Object $payload -Name 'info'
             $rateLimits = Get-AgentUsageProperty -Object $payload -Name 'rate_limits'
             $primary = Get-AgentUsageProperty -Object $rateLimits -Name 'primary'
-            $windowMinutes = ConvertTo-AgentUsageLong -Value (Get-AgentUsageProperty -Object $primary -Name 'window_minutes')
-            $usedPercent = Get-AgentUsageProperty -Object $primary -Name 'used_percent'
-            if ($null -ne $windowMinutes -and $windowMinutes -eq 10080 -and $null -ne $usedPercent) {
+            $secondary = Get-AgentUsageProperty -Object $rateLimits -Name 'secondary'
+            foreach ($rateLimit in @($primary, $secondary)) {
+                $windowMinutes = ConvertTo-AgentUsageLong -Value (Get-AgentUsageProperty -Object $rateLimit -Name 'window_minutes')
+                $usedPercent = Get-AgentUsageProperty -Object $rateLimit -Name 'used_percent'
+                if ($null -eq $windowMinutes -or $windowMinutes -notin @(300, 10080) -or $null -eq $usedPercent) { continue }
                 try {
                     $used = [double]$usedPercent
                     if ($used -ge 0) {
-                        if ($null -eq $summary.latestWeeklyRateAt -or $timestamp -gt $summary.latestWeeklyRateAt) {
+                        $candidate = [pscustomobject][ordered]@{
+                            usedPercent = [Math]::Min(100.0, $used)
+                            resetAt = ConvertTo-AgentUsageResetTime -Value (Get-AgentUsageProperty -Object $rateLimit -Name 'resets_at')
+                        }
+                        if ($windowMinutes -eq 300 -and ($null -eq $summary.latestFiveHourRateAt -or $timestamp -gt $summary.latestFiveHourRateAt)) {
+                            $summary.latestFiveHourRate = $candidate
+                            $summary.latestFiveHourRateAt = $timestamp
+                        }
+                        elseif ($windowMinutes -eq 10080 -and ($null -eq $summary.latestWeeklyRateAt -or $timestamp -gt $summary.latestWeeklyRateAt)) {
                             $summary.latestWeeklyRate = [pscustomobject][ordered]@{
                                 usedPercent = [Math]::Min(100.0, $used)
-                                resetAt = ConvertTo-AgentUsageResetTime -Value (Get-AgentUsageProperty -Object $primary -Name 'resets_at')
+                                resetAt = $candidate.resetAt
                             }
                             $summary.latestWeeklyRateAt = $timestamp
                         }
@@ -381,6 +393,10 @@ function Get-AgentUsageState {
             }
         }
         Merge-AgentUsageTotals -Target $codex.totals -Source $summary.totals
+        if ($null -ne $summary.latestFiveHourRateAt -and ($null -eq $codex.latestFiveHourRateAt -or $summary.latestFiveHourRateAt -gt $codex.latestFiveHourRateAt)) {
+            $codex.latestFiveHourRate = $summary.latestFiveHourRate
+            $codex.latestFiveHourRateAt = $summary.latestFiveHourRateAt
+        }
         if ($null -ne $summary.latestWeeklyRateAt -and ($null -eq $codex.latestWeeklyRateAt -or $summary.latestWeeklyRateAt -gt $codex.latestWeeklyRateAt)) {
             $codex.latestWeeklyRate = $summary.latestWeeklyRate
             $codex.latestWeeklyRateAt = $summary.latestWeeklyRateAt
@@ -462,6 +478,12 @@ function Get-AgentUsageState {
         $claudeCachePercent = [Math]::Min(100.0, [Math]::Max(0.0, ($claude.totals.cached * 100.0 / $claudeInputTotal)))
     }
 
+    $fiveHourRemaining = $null
+    $fiveHourResetAt = $null
+    if ($null -ne $codex.latestFiveHourRate) {
+        $fiveHourRemaining = [Math]::Max(0.0, [Math]::Min(100.0, 100.0 - [double]$codex.latestFiveHourRate.usedPercent))
+        $fiveHourResetAt = $codex.latestFiveHourRate.resetAt
+    }
     $weeklyRemaining = $null
     $weeklyResetAt = $null
     if ($null -ne $codex.latestWeeklyRate) {
@@ -472,6 +494,8 @@ function Get-AgentUsageState {
     return [pscustomobject][ordered]@{
         codex = [pscustomobject][ordered]@{
             totalTokens = if ($codex.totals.eventCount -gt 0) { $codex.totals.total } else { $null }
+            fiveHourRemainingPercent = $fiveHourRemaining
+            fiveHourResetAt = $fiveHourResetAt
             weeklyRemainingPercent = $weeklyRemaining
             weeklyResetAt = $weeklyResetAt
             cachePercent = $codexCachePercent

@@ -7,8 +7,10 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $testRoot = Join-Path $PSScriptRoot '.test-agent-usage'
 $codexRoot = Join-Path $testRoot 'codex\2026\08\04'
+$legacyCodexRoot = Join-Path $testRoot 'legacy-codex\2026\08\04'
 $claudeRoot = Join-Path $testRoot 'claude\C--Test'
 $codexFile = Join-Path $codexRoot 'rollout-test.jsonl'
+$legacyCodexFile = Join-Path $legacyCodexRoot 'rollout-legacy-test.jsonl'
 $claudeFile = Join-Path $claudeRoot 'session-test.jsonl'
 $officialSettingsFile = Join-Path $testRoot 'official-settings.json'
 $customSettingsFile = Join-Path $testRoot 'custom-settings.json'
@@ -28,6 +30,7 @@ function Assert-Approximately {
 
 if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 $null = New-Item -ItemType Directory -Path $codexRoot -Force
+$null = New-Item -ItemType Directory -Path $legacyCodexRoot -Force
 $null = New-Item -ItemType Directory -Path $claudeRoot -Force
 
 . (Join-Path $projectRoot 'app\Get-AgentUsageState.ps1')
@@ -37,9 +40,14 @@ try {
     $codexLines = @(
         '{"timestamp":"2026-08-03T15:59:59Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":999,"input_tokens":900,"output_tokens":99,"cached_input_tokens":600}}}}',
         '{"timestamp":"2026-08-04T09:00:00+08:00","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":1000,"input_tokens":900,"output_tokens":100,"cached_input_tokens":600}},"rate_limits":{"primary":{"window_minutes":10080,"used_percent":33,"resets_at":1786198904}}}}',
-        '{"timestamp":"2026-08-04T10:00:00+08:00","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":2500,"input_tokens":2000,"output_tokens":500,"cached_input_tokens":1500,"cache_write_input_tokens":50}},"rate_limits":{"primary":{"window_minutes":10080,"used_percent":33,"resets_at":1786198904}}}}'
+        '{"timestamp":"2026-08-04T10:00:00+08:00","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":2500,"input_tokens":2000,"output_tokens":500,"cached_input_tokens":1500,"cache_write_input_tokens":50}},"rate_limits":{"primary":{"window_minutes":300,"used_percent":40,"resets_at":1786180000},"secondary":{"window_minutes":10080,"used_percent":35,"resets_at":1786198904}}}}'
     )
     [System.IO.File]::WriteAllLines($codexFile, $codexLines, [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText(
+        $legacyCodexFile,
+        '{"timestamp":"2026-08-04T09:00:00+08:00","type":"event_msg","payload":{"type":"token_count","info":{},"rate_limits":{"primary":{"window_minutes":10080,"used_percent":33,"resets_at":1786198904}}}}' + [Environment]::NewLine,
+        [System.Text.UTF8Encoding]::new($false)
+    )
 
     $claudeLines = @(
         '{"timestamp":"2026-08-03T15:59:59Z","type":"assistant","message":{"id":"outside-day","model":"test-model","stop_reason":"end_turn","usage":{"input_tokens":999,"output_tokens":99,"cache_read_input_tokens":500,"cache_creation_input_tokens":100}}}',
@@ -59,8 +67,14 @@ try {
 
     Assert-Equal $usage.codex.totalTokens 3500 "Codex should sum only today's incremental tokens."
     Assert-Approximately $usage.codex.cachePercent (2100 * 100.0 / 2900) 0.001 'Codex cache ratio mismatch.'
-    Assert-Equal $usage.codex.weeklyRemainingPercent 67 'Codex weekly remaining percentage mismatch.'
+    Assert-Equal $usage.codex.fiveHourRemainingPercent 60 'Codex five-hour remaining percentage mismatch.'
+    Assert-Equal $usage.codex.fiveHourResetAt ([DateTimeOffset]::FromUnixTimeSeconds(1786180000)) 'Codex five-hour reset time mismatch.'
+    Assert-Equal $usage.codex.weeklyRemainingPercent 65 'Codex weekly remaining percentage mismatch.'
     Assert-Equal $usage.codex.weeklyResetAt ([DateTimeOffset]::FromUnixTimeSeconds(1786198904)) 'Codex weekly reset time mismatch.'
+
+    $legacyUsage = Get-AgentUsageState -CodexSessionsRoot (Join-Path $testRoot 'legacy-codex') -ClaudeProjectsRoot (Join-Path $testRoot 'missing-claude') -ClaudeSettingsPath $officialSettingsFile -Now $now
+    Assert-Equal $legacyUsage.codex.fiveHourRemainingPercent $null 'Legacy Codex usage should not invent a five-hour limit.'
+    Assert-Equal $legacyUsage.codex.weeklyRemainingPercent 67 'Legacy primary weekly limit compatibility mismatch.'
 
     Assert-Equal $usage.claude.totalTokens 5300 'Claude should deduplicate assistant usage snapshots by message id.'
     Assert-Approximately $usage.claude.cachePercent (900 * 100.0 / 4550) 0.001 'Claude cache ratio should count cache reads as hits but not cache creation.'
