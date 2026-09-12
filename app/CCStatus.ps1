@@ -80,12 +80,16 @@ public static class CCStatusNativeMethods
 
     [DllImport("user32.dll")]
     public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    public static extern bool DestroyIcon(IntPtr hIcon);
 }
 '@
 
 $appRoot = $PSScriptRoot
 $dataRoot = Join-Path $appRoot 'data'
 $statePath = Join-Path $dataRoot 'state.json'
+$ignoredCodexSessionsPath = Join-Path $dataRoot 'ignored-codex-sessions.json'
 $settingsPath = Join-Path $dataRoot 'settings.json'
 $exitRequestPath = Join-Path $dataRoot 'exit.request'
 $showRequestPath = Join-Path $dataRoot 'show.request'
@@ -102,9 +106,6 @@ if (Test-Path -LiteralPath $rolloutReaderPath) {
 }
 if (Test-Path -LiteralPath $approvalReaderPath) {
     . $approvalReaderPath
-}
-if (Test-Path -LiteralPath $usageReaderPath) {
-    . $usageReaderPath
 }
 if (Test-Path -LiteralPath $claudeTranscriptReaderPath) {
     . $claudeTranscriptReaderPath
@@ -495,6 +496,167 @@ function Normalize-AgentSession {
     return $Session
 }
 
+function New-TrayStatusIcon {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('approval', 'working', 'completed')]
+        [string]$State,
+
+        [ValidateRange(0.0, 1.0)]
+        [double]$Intensity = 1.0
+    )
+
+    $bitmap = [System.Drawing.Bitmap]::new(32, 32, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $graphics = $null
+    $symbolBrush = $null
+    $ringPen = $null
+    $symbolPen = $null
+    $nativeIcon = [IntPtr]::Zero
+    try {
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.Clear([System.Drawing.Color]::Transparent)
+        $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+
+        $accent = switch ($State) {
+            'approval' { [System.Drawing.Color]::FromArgb(255, 176, 32) }
+            'working' {
+                [System.Drawing.Color]::FromArgb(
+                    [int][Math]::Round(50 * $Intensity),
+                    [int][Math]::Round(150 + (50 * $Intensity)),
+                    [int][Math]::Round(240 + (15 * $Intensity))
+                )
+            }
+            default { [System.Drawing.Color]::FromArgb(56, 217, 150) }
+        }
+        $ringAlpha = if ($State -eq 'working') {
+            [Math]::Max(40, [Math]::Min(255, [int][Math]::Round(40 + (215 * $Intensity))))
+        }
+        else { 255 }
+        $symbolAlpha = 255
+        $symbolBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb($symbolAlpha, $accent))
+        $ringInset = if ($State -eq 'working') { 8.0 - (5.5 * $Intensity) } else { 4.0 }
+        $ringSize = 32.0 - (2.0 * $ringInset)
+        $ringWidth = if ($State -eq 'working') { 1.5 + (3.0 * $Intensity) } else { 3.0 }
+        $ringPen = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb($ringAlpha, $accent), $ringWidth)
+        $ringPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $ringPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+
+        $graphics.DrawEllipse($ringPen, $ringInset, $ringInset, $ringSize, $ringSize)
+        switch ($State) {
+            'approval' {
+                $graphics.FillRectangle($symbolBrush, 14.5, 9.0, 3.0, 10.0)
+                $graphics.FillEllipse($symbolBrush, 14.25, 21.0, 3.5, 3.5)
+            }
+            'working' {
+                $dotSize = 5.0 + (8.0 * $Intensity)
+                $dotInset = (32.0 - $dotSize) / 2.0
+                $graphics.FillEllipse($symbolBrush, $dotInset, $dotInset, $dotSize, $dotSize)
+            }
+            'completed' {
+                $symbolPen = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb($symbolAlpha, $accent), 3.5)
+                $symbolPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+                $symbolPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+                $graphics.DrawLines($symbolPen, [System.Drawing.PointF[]]@(
+                    [System.Drawing.PointF]::new(9.5, 16.0),
+                    [System.Drawing.PointF]::new(14.0, 20.5),
+                    [System.Drawing.PointF]::new(22.5, 11.5)
+                ))
+            }
+        }
+
+        $nativeIcon = $bitmap.GetHicon()
+        return ([System.Drawing.Icon]::FromHandle($nativeIcon).Clone())
+    }
+    finally {
+        if ($nativeIcon -ne [IntPtr]::Zero) { $null = [CCStatusNativeMethods]::DestroyIcon($nativeIcon) }
+        if ($null -ne $symbolPen) { $symbolPen.Dispose() }
+        if ($null -ne $ringPen) { $ringPen.Dispose() }
+        if ($null -ne $symbolBrush) { $symbolBrush.Dispose() }
+        if ($null -ne $graphics) { $graphics.Dispose() }
+        $bitmap.Dispose()
+    }
+}
+
+function Set-NotifyIconImage {
+    param([System.Drawing.Icon]$Icon)
+
+    if ($null -ne $Icon -and -not [object]::ReferenceEquals($notifyIcon.Icon, $Icon)) {
+        $notifyIcon.Icon = $Icon
+    }
+}
+
+function Update-TrayAnimationState {
+    $shouldAnimate = $script:currentTrayState -eq 'working' -and
+        -not $window.IsVisible -and
+        $script:workingTrayFrames.Count -eq 6
+
+    if ($shouldAnimate) {
+        if (-not $script:trayAnimationTimer.IsEnabled) {
+            $script:trayAnimationFrame = 0
+            Set-NotifyIconImage -Icon $script:workingTrayFrames[0]
+            $script:trayAnimationTimer.Start()
+        }
+        return
+    }
+
+    if ($script:trayAnimationTimer.IsEnabled) { $script:trayAnimationTimer.Stop() }
+    $script:trayAnimationFrame = 0
+    if ($script:currentTrayState -eq 'working' -and $script:workingTrayFrames.Count -eq 6) {
+        Set-NotifyIconImage -Icon $script:workingTrayFrames[3]
+    }
+}
+
+function Set-TrayStatus {
+    param([string]$State)
+
+    $newTrayState = if ($State -in @('approval', 'working', 'completed')) { $State } else { 'idle' }
+    if ($script:currentTrayState -eq $newTrayState) {
+        Update-TrayAnimationState
+        return
+    }
+
+    if ($script:trayAnimationTimer.IsEnabled) { $script:trayAnimationTimer.Stop() }
+    $script:trayAnimationFrame = 0
+    $script:currentTrayState = $newTrayState
+    $nextIcon = switch ($newTrayState) {
+        'approval' { $script:trayStatusIcons['approval'] }
+        'working' {
+            if ($script:workingTrayFrames.Count -eq 6) { $script:workingTrayFrames[3] } else { $trayIcon }
+        }
+        'completed' { $script:trayStatusIcons['completed'] }
+        default { $trayIcon }
+    }
+    if ($null -eq $nextIcon) { $nextIcon = $trayIcon }
+    Set-NotifyIconImage -Icon $nextIcon
+    Update-TrayAnimationState
+}
+
+function Initialize-TrayStatusIcons {
+    try {
+        $script:trayStatusIcons['approval'] = New-TrayStatusIcon -State 'approval'
+        $script:trayStatusIcons['completed'] = New-TrayStatusIcon -State 'completed'
+        $script:workingTrayFrames = @(
+            0.0, 0.25, 0.65, 1.0, 0.65, 0.25 | ForEach-Object {
+                New-TrayStatusIcon -State 'working' -Intensity $_
+            }
+        )
+    }
+    catch {
+        Write-StatusDiagnostic -Message ("tray status icons unavailable; using the default icon: {0}" -f $_.Exception.Message)
+        Dispose-TrayStatusIcons
+    }
+}
+
+function Dispose-TrayStatusIcons {
+    if ($script:trayAnimationTimer.IsEnabled) { $script:trayAnimationTimer.Stop() }
+    foreach ($icon in @($script:trayStatusIcons.Values) + @($script:workingTrayFrames)) {
+        if ($null -ne $icon) { $icon.Dispose() }
+    }
+    $script:trayStatusIcons.Clear()
+    $script:workingTrayFrames = @()
+}
+
 function Set-StatusVisual {
     param(
         [string]$State,
@@ -610,11 +772,68 @@ function Set-StatusVisual {
         $script:lastAggregateState = $newState
     }
 
+    Set-TrayStatus -State $newState
+
     $notifyIcon.Text = switch ($newState) {
         'approval' { "$sourceLabel：需要批准" }
         'working' { "$sourceLabel：工作中" }
         'completed' { "$sourceLabel：已完成" }
         default { "$sourceLabel：无任务" }
+    }
+}
+
+function Stop-AgentUsageWorker {
+    if ($null -ne $script:usageWorkerPipeline) {
+        try { $script:usageWorkerPipeline.Stop() } finally { $script:usageWorkerPipeline.Dispose() }
+        $script:usageWorkerPipeline = $null
+    }
+    $script:usageWorkerPending = $null
+    if ($null -ne $script:usageWorkerRunspace) {
+        $script:usageWorkerRunspace.Dispose()
+        $script:usageWorkerRunspace = $null
+    }
+}
+
+function Invoke-AgentUsageRefresh {
+    param([string]$ReaderPath = $usageReaderPath)
+
+    $now = [DateTimeOffset]::UtcNow
+    if ($null -ne $script:usageWorkerPending) {
+        if (-not $script:usageWorkerPending.IsCompleted) { return }
+        try {
+            $results = @($script:usageWorkerPipeline.EndInvoke($script:usageWorkerPending))
+            if ($results.Count -gt 0) { $script:cachedUsageState = $results[$results.Count - 1] }
+        }
+        catch { Write-StatusDiagnostic -Message 'Usage refresh failed; retaining the previous snapshot.' }
+        finally {
+            $script:usageWorkerPipeline.Dispose()
+            $script:usageWorkerPipeline = $null
+            $script:usageWorkerPending = $null
+            $script:nextUsageRefreshAt = $now.AddSeconds(10)
+        }
+    }
+    if ($now -lt $script:nextUsageRefreshAt -or -not (Test-Path -LiteralPath $ReaderPath)) { return }
+    try {
+        if ($null -eq $script:usageWorkerRunspace) {
+            $script:usageWorkerRunspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+            $script:usageWorkerRunspace.ApartmentState = 'MTA'
+            $script:usageWorkerRunspace.ThreadOptions = 'ReuseThread'
+            $script:usageWorkerRunspace.Open()
+        }
+        $script:usageWorkerPipeline = [PowerShell]::Create()
+        $script:usageWorkerPipeline.Runspace = $script:usageWorkerRunspace
+        $null = $script:usageWorkerPipeline.AddScript({
+            param($ReaderPath)
+            $ErrorActionPreference = 'Stop'
+            if (-not (Get-Command Get-AgentUsageState -ErrorAction SilentlyContinue)) { . $ReaderPath }
+            Get-AgentUsageState
+        }.ToString()).AddArgument($ReaderPath)
+        $script:usageWorkerPending = $script:usageWorkerPipeline.BeginInvoke()
+    }
+    catch {
+        Stop-AgentUsageWorker
+        $script:nextUsageRefreshAt = $now.AddSeconds(10)
+        Write-StatusDiagnostic -Message 'Usage worker could not start; retry scheduled.'
     }
 }
 
@@ -628,13 +847,11 @@ function Update-StatusState {
         Remove-Item -LiteralPath $showRequestPath -Force -ErrorAction SilentlyContinue
         if (-not $window.IsVisible) { $window.Show() }
         $window.Activate()
+        Update-TrayAnimationState
     }
 
     $now = [DateTimeOffset]::UtcNow
-    if ($now -ge $script:nextUsageRefreshAt -and (Get-Command Get-AgentUsageState -ErrorAction SilentlyContinue)) {
-        try { $script:cachedUsageState = Get-AgentUsageState } catch {}
-        $script:nextUsageRefreshAt = $now.AddSeconds(10)
-    }
+    Invoke-AgentUsageRefresh
     $usageState = $script:cachedUsageState
 
     $stateFingerprint = Get-StatusFileFingerprint -Path $statePath
@@ -671,7 +888,13 @@ function Update-StatusState {
     $sessions = @($sessions | ForEach-Object { Normalize-AgentSession -Session $_ })
 
     if (Get-Command Resolve-CodexSessionStates -ErrorAction SilentlyContinue) {
-        $sessions = @(Resolve-CodexSessionStates -Sessions $sessions -Now $now)
+        $ignoredCodexSessionIds = if (Get-Command Get-CodexIgnoredSessionIds -ErrorAction SilentlyContinue) {
+            @(Get-CodexIgnoredSessionIds -Path $ignoredCodexSessionsPath -Now $now)
+        }
+        else {
+            @()
+        }
+        $sessions = @(Resolve-CodexSessionStates -Sessions $sessions -Now $now -IgnoredSessionIds $ignoredCodexSessionIds)
     }
     if (Get-Command Resolve-ClaudeTranscriptStates -ErrorAction SilentlyContinue) {
         try { $sessions = @(Resolve-ClaudeTranscriptStates -Sessions $sessions -Now $now) } catch {}
@@ -683,10 +906,6 @@ function Update-StatusState {
     $approvalSessions = @()
     $workingSessions = @()
     $completedSessions = @()
-    $deniedApprovalThreads = @()
-    if (Get-Command Get-CodexApprovalDeniedThreadIds -ErrorAction SilentlyContinue) {
-        $deniedApprovalThreads = @(Get-CodexApprovalDeniedThreadIds)
-    }
 
     foreach ($session in $sessions) {
         try {
@@ -694,7 +913,6 @@ function Update-StatusState {
             switch ([string]$session.status) {
                 'approval' { if ($updatedAt -ge $activeCutoff) { $approvalSessions += $session } }
                 'working' {
-                    if ($deniedApprovalThreads -contains [string]$session.sessionId) { continue }
                     $liveBacked = $null -ne $session.PSObject.Properties['isLive'] -and [bool]$session.isLive
                     # 仅 hook 记录的会话（如 codex exec / 无 rollout 文件的 CLI 会话）
                     # 没有文件锁存活信号，最后一次活动 120 秒后即视为已结束，
@@ -1153,11 +1371,12 @@ function Remove-CodexHookTrustState {
 }
 
 function Repair-StatusHooks {
+    param([ValidateSet('all', 'claude', 'codex')][string]$Provider = 'all')
     $claudeBridgePath = Join-Path $appRoot 'Write-ClaudeStatus.ps1'
     $codexBridgePath = Join-Path $appRoot 'Write-Codex.ps1'
 
-    $claudeRepairSucceeded = $true
-    if (Test-Path -LiteralPath $claudeBridgePath) {
+    $repairSucceeded = $true
+    if ($Provider -in @('all', 'claude') -and (Test-Path -LiteralPath $claudeBridgePath)) {
         try {
             $sourceFingerprint = Get-StatusFileFingerprint -Path $claudeSettingsPath
             $config = [pscustomobject][ordered]@{}
@@ -1220,14 +1439,15 @@ function Repair-StatusHooks {
             }
         }
         catch {
-            $claudeRepairSucceeded = $false
+            $repairSucceeded = $false
             Write-RepairLog ('claude hooks repair failed: ' + $_.Exception.Message)
         }
     }
 
-    if (Test-Path -LiteralPath $codexBridgePath) {
+    if ($Provider -in @('all', 'codex') -and (Test-Path -LiteralPath $codexBridgePath)) {
         try {
             $codexHooksPath = Join-Path $env:USERPROFILE '.codex\hooks.json'
+            $sourceFingerprint = Get-StatusFileFingerprint -Path $codexHooksPath
             $config = [pscustomobject][ordered]@{}
             if (Test-Path -LiteralPath $codexHooksPath) {
                 $config = [System.IO.File]::ReadAllText($codexHooksPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
@@ -1263,25 +1483,34 @@ function Repair-StatusHooks {
             }
 
             if ($changed) {
+                if ((Get-StatusFileFingerprint -Path $codexHooksPath) -ne $sourceFingerprint) {
+                    throw 'Codex hooks.json changed during hook repair.'
+                }
                 Save-ConfigAtomic -Value $config -Path $codexHooksPath
                 $codexTomlPath = Join-Path $env:USERPROFILE '.codex\config.toml'
-                if (Remove-CodexHookTrustState -ConfigPath $codexTomlPath -KeyPrefixes $staleTrustPrefixes) {
+                if ($staleTrustPrefixes.Count -gt 0 -and (Remove-CodexHookTrustState -ConfigPath $codexTomlPath -KeyPrefixes $staleTrustPrefixes)) {
                     Write-RepairLog "codex hook trust invalidated for review: $codexTomlPath"
                 }
                 Write-RepairLog "codex hooks restored: $codexHooksPath"
             }
         }
         catch {
+            $repairSucceeded = $false
             Write-RepairLog ('codex hooks repair failed: ' + $_.Exception.Message)
         }
     }
-    return $claudeRepairSucceeded
+    return $repairSucceeded
 }
 
-$script:claudeSettingsFingerprint = $null
-$script:claudeSettingsChangedAt = $null
+$script:configurationChecks = @{
+    claude = [pscustomobject]@{ path = $claudeSettingsPath; fingerprint = $null; changedAt = [DateTimeOffset]::UtcNow }
+    codex = [pscustomobject]@{ path = (Join-Path $env:USERPROFILE '.codex\hooks.json'); fingerprint = $null; changedAt = [DateTimeOffset]::UtcNow }
+}
 $script:nextConfigurationCheckAt = [DateTimeOffset]::MinValue
 $script:cachedUsageState = $null
+$script:usageWorkerRunspace = $null
+$script:usageWorkerPipeline = $null
+$script:usageWorkerPending = $null
 $script:nextUsageRefreshAt = [DateTimeOffset]::MinValue
 $script:cachedHookSessions = @()
 $script:stateFingerprint = $null
@@ -1296,25 +1525,23 @@ function Invoke-ConfigurationMaintenance {
     if ($now -lt $script:nextConfigurationCheckAt) { return }
     $script:nextConfigurationCheckAt = $now.AddSeconds(1)
 
-    $fingerprint = Get-StatusFileFingerprint -Path $claudeSettingsPath
-    if ($null -eq $fingerprint) { return }
-    if ($null -eq $script:claudeSettingsFingerprint) {
-        $script:claudeSettingsFingerprint = $fingerprint
-        return
-    }
-    if ($fingerprint -ne $script:claudeSettingsFingerprint) {
-        $script:claudeSettingsFingerprint = $fingerprint
-        $script:claudeSettingsChangedAt = $now
-        return
-    }
-    if ($null -eq $script:claudeSettingsChangedAt -or ($now - $script:claudeSettingsChangedAt).TotalSeconds -lt 2) { return }
-
-    if (Repair-StatusHooks) {
-        $script:claudeSettingsFingerprint = Get-StatusFileFingerprint -Path $claudeSettingsPath
-        $script:claudeSettingsChangedAt = $null
-    }
-    else {
-        $script:claudeSettingsChangedAt = $now
+    foreach ($provider in @('claude', 'codex')) {
+        $check = $script:configurationChecks[$provider]
+        $fingerprint = Get-StatusFileFingerprint -Path $check.path
+        if ($null -eq $fingerprint) { continue }
+        if ($fingerprint -ne $check.fingerprint) {
+            $check.fingerprint = $fingerprint
+            $check.changedAt = $now
+            continue
+        }
+        if ($null -eq $check.changedAt -or ($now - $check.changedAt).TotalSeconds -lt 2) { continue }
+        if (Repair-StatusHooks -Provider $provider) {
+            $check.fingerprint = Get-StatusFileFingerprint -Path $check.path
+            $check.changedAt = $null
+        }
+        else {
+            $check.changedAt = $now
+        }
     }
 }
 
@@ -1330,6 +1557,21 @@ $notifyIcon.Icon = $trayIcon
 $notifyIcon.Text = 'CC Status：无任务'
 $notifyIcon.Visible = $true
 $script:hideTipShown = $false
+$script:trayStatusIcons = @{}
+$script:workingTrayFrames = @()
+$script:currentTrayState = ''
+$script:trayAnimationFrame = 0
+$script:trayAnimationTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:trayAnimationTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+$script:trayAnimationTimer.add_Tick({
+    if ($script:currentTrayState -ne 'working' -or $window.IsVisible -or $script:workingTrayFrames.Count -ne 6) {
+        Update-TrayAnimationState
+        return
+    }
+    $script:trayAnimationFrame = ($script:trayAnimationFrame + 1) % $script:workingTrayFrames.Count
+    Set-NotifyIconImage -Icon $script:workingTrayFrames[$script:trayAnimationFrame]
+})
+Initialize-TrayStatusIcons
 
 $contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $showMenuItem = $contextMenu.Items.Add('显示 / 隐藏')
@@ -1341,6 +1583,7 @@ $notifyIcon.ContextMenuStrip = $contextMenu
 
 $showMenuItem.add_Click({
     if ($window.IsVisible) { $window.Hide() } else { $window.Show(); $window.Activate() }
+    Update-TrayAnimationState
 })
 $themeButton.add_Click({
     $nextTheme = if ($script:currentTheme -eq 'dark') { 'light' } else { 'dark' }
@@ -1364,6 +1607,7 @@ $exitMenuItem.add_Click({
 })
 $notifyIcon.add_DoubleClick({
     if ($window.IsVisible) { $window.Activate() } else { $window.Show(); $window.Activate() }
+    Update-TrayAnimationState
 })
 
 $card.add_MouseLeftButtonDown({
@@ -1391,6 +1635,7 @@ $window.add_Closing({
     if (-not $script:isExiting) {
         $eventArgs.Cancel = $true
         $window.Hide()
+        Update-TrayAnimationState
         if (-not $script:hideTipShown) {
             try {
     $notifyIcon.ShowBalloonTip(
@@ -1409,8 +1654,10 @@ $window.add_Closing({
     }
     Save-StatusSettings
     $script:statusTimer.Stop()
+    Stop-AgentUsageWorker
     $notifyIcon.Visible = $false
     $notifyIcon.Dispose()
+    Dispose-TrayStatusIcons
     if ($ownsTrayIcon -and $null -ne $trayIcon) { $trayIcon.Dispose() }
     Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $exitRequestPath -Force -ErrorAction SilentlyContinue
@@ -1421,11 +1668,14 @@ $window.add_Closed({
 })
 
 $null = Repair-StatusHooks
-$script:claudeSettingsFingerprint = Get-StatusFileFingerprint -Path $claudeSettingsPath
-$script:claudeSettingsChangedAt = [DateTimeOffset]::UtcNow
+foreach ($check in $script:configurationChecks.Values) {
+    $check.fingerprint = Get-StatusFileFingerprint -Path $check.path
+    $check.changedAt = [DateTimeOffset]::UtcNow
+}
 Invoke-StatusRefresh
 $script:statusTimer.Start()
 if (-not $window.IsVisible) { $window.Show() }
+Update-TrayAnimationState
 try {
     [System.Windows.Threading.Dispatcher]::Run()
 }
@@ -1434,6 +1684,8 @@ catch {
     throw
 }
 finally {
+    Stop-AgentUsageWorker
+    Dispose-TrayStatusIcons
     Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
     try { $singleInstance.ReleaseMutex() } catch {}
     $singleInstance.Dispose()

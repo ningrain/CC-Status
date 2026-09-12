@@ -107,6 +107,28 @@ try {
     Assert-Equal $resolved.Count 1 'A live approval should be preserved.'
     Assert-Equal $resolved[0].status 'approval' 'Live approval state mismatch.'
     Assert-Equal $resolved[0].surface 'cli' 'CLI surface should be propagated to hook approval.'
+
+    $ignoredRollout = $liveRollout.PSObject.Copy()
+    $ignoredRollout.sessionId = 'internal-suggestion-session'
+    $ignoredRollout.turnId = 'internal-suggestion-turn'
+    $visibleParallelSession = $liveRollout.PSObject.Copy()
+    $visibleParallelSession.sessionId = 'visible-user-session'
+    $visibleParallelSession.turnId = 'visible-user-turn'
+    $resolved = @(Resolve-CodexSessionStates -Sessions @($ignoredRollout, $visibleParallelSession) -IgnoredSessionIds @('internal-suggestion-session'))
+    Assert-Equal $resolved.Count 1 'Ignored Codex background rollout must not increase the visible task count.'
+    Assert-Equal $resolved[0].sessionId 'visible-user-session' 'A real parallel Codex task must remain visible.'
+
+    $ignoredRegistryPath = Join-Path $testRoot 'ignored-codex-sessions.json'
+    $ignoredRegistry = [pscustomobject]@{
+        sessions = @(
+            [pscustomobject]@{ sessionId = 'fresh-session'; ignoredAt = [DateTimeOffset]::UtcNow.ToString('o') },
+            [pscustomobject]@{ sessionId = 'expired-session'; ignoredAt = [DateTimeOffset]::UtcNow.AddHours(-49).ToString('o') }
+        )
+    } | ConvertTo-Json -Depth 4
+    [System.IO.File]::WriteAllText($ignoredRegistryPath, $ignoredRegistry, [System.Text.UTF8Encoding]::new($false))
+    $ignoredIds = @(Get-CodexIgnoredSessionIds -Path $ignoredRegistryPath)
+    Assert-Equal $ignoredIds.Count 1 'Expired ignored Codex sessions should not be returned.'
+    Assert-Equal $ignoredIds[0] 'fresh-session' 'Fresh ignored Codex session should be returned.'
     Write-Host 'Rollout monitor tests passed.' -ForegroundColor Green
 }
 finally {

@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory)][string]$SessionId,
     [Parameter(Mandatory)][string]$TranscriptPath,
     [string]$ToolName = '',
+    [int]$ClaudeProcessId = 0,
+    [long]$ClaudeProcessStartTicks = 0,
     [int]$TimeoutSeconds = 90,
     [int]$ExecutionTimeoutSeconds = 43200,
     [int]$HeartbeatSeconds = 30,
@@ -22,7 +24,7 @@ $targetToolUseId = ''
 $execution = $null
 $executionMissingAt = $null
 $nextHeartbeatAt = [DateTime]::MaxValue
-$nextProcessCheckAt = if ($ToolName -eq 'Bash') { [DateTime]::MinValue } else { [DateTime]::MaxValue }
+$nextProcessCheckAt = if ($ToolName -eq 'Bash' -and $ClaudeProcessId -gt 0) { [DateTime]::MinValue } else { [DateTime]::MaxValue }
 $nextTranscriptCheckAt = [DateTime]::MinValue
 $initialProcessIds = @{}
 
@@ -48,11 +50,14 @@ function Find-ClaudeShellExecution {
         [Parameter(Mandatory)][hashtable]$CurrentProcesses
     )
 
-    if ($ToolName -ne 'Bash') { return $null }
+    if ($ToolName -ne 'Bash' -or $ClaudeProcessId -le 0 -or -not $CurrentProcesses.ContainsKey($ClaudeProcessId)) { return $null }
+    $owner = $CurrentProcesses[$ClaudeProcessId]
+    if ($ClaudeProcessStartTicks -gt 0 -and ([DateTime]$owner.CreationDate).ToUniversalTime().Ticks -ne $ClaudeProcessStartTicks) { return $null }
     $shellNames = @('bash.exe', 'sh.exe', 'cmd.exe', 'powershell.exe', 'pwsh.exe', 'wsl.exe')
     foreach ($process in @($CurrentProcesses.Values)) {
         $processId = [int]$process.ProcessId
         if ($InitialProcessIds.ContainsKey($processId) -or [string]$process.Name -notin $shellNames) { continue }
+        if ([string]$process.CommandLine -match '(?i)(Write-(AgentStatus|ClaudeStatus)|Watch-Claude(Permission|Turn))\.ps1') { continue }
 
         $parentId = [int]$process.ParentProcessId
         for ($depth = 0; $depth -lt 8 -and $parentId -gt 0; $depth++) {
@@ -60,8 +65,10 @@ function Find-ClaudeShellExecution {
             $parent = $CurrentProcesses[$parentId]
             $parentName = [string]$parent.Name
             $parentCommandLine = [string]$parent.CommandLine
+            if ($parentCommandLine -match '(?i)(Write-(AgentStatus|ClaudeStatus)|Watch-Claude(Permission|Turn))\.ps1') { break }
             if ($parentName -eq 'claude.exe' -or
                 ($parentName -eq 'node.exe' -and $parentCommandLine -match '(?i)(claude-code|[\\/]claude(?:\.cmd|\.js)?(?:\s|$))')) {
+                if ([int]$parent.ProcessId -ne $ClaudeProcessId) { break }
                 return [pscustomobject]@{
                     shellProcessId = $processId
                     claudeProcessId = [int]$parent.ProcessId
@@ -136,7 +143,7 @@ function Invoke-ResolutionHook {
     $payload | & $powershellPath -NoProfile -ExecutionPolicy Bypass -File $bridgePath | Out-Null
 }
 
-if ($ToolName -eq 'Bash') {
+if ($ToolName -eq 'Bash' -and $ClaudeProcessId -gt 0) {
     $initialProcessIds = Get-ProcessSnapshot
 }
 if (-not [string]::IsNullOrWhiteSpace($ReadyPath)) {
