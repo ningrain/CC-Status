@@ -21,6 +21,7 @@ $testClaudePermissionWatcher = Join-Path $testRoot 'Watch-ClaudePermission.ps1'
 $testClaudeTurnWatcher = Join-Path $testRoot 'Watch-ClaudeTurn.ps1'
 $testClaudeIncrementalReader = Join-Path $testRoot 'Read-ClaudeTranscriptIncremental.ps1'
 $statePath = Join-Path $testRoot 'data\state.json'
+$ignoredCodexSessionsPath = Join-Path $testRoot 'data\ignored-codex-sessions.json'
 $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $fakeClaudeProcess = $null
@@ -50,7 +51,8 @@ function Invoke-Hook {
     param(
         [string]$EventName,
         [string]$SessionId = 'session-test-1',
-        [string]$TurnId = 'turn-test-1'
+        [string]$TurnId = 'turn-test-1',
+        [string]$Prompt = ''
     )
 
     $payload = [pscustomobject][ordered]@{
@@ -59,6 +61,7 @@ function Invoke-Hook {
         cwd = 'D:\随便玩玩'
         hook_event_name = $EventName
         model = 'test-model'
+        prompt = $Prompt
     } | ConvertTo-Json -Compress
 
     return $payload | & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File $testBridge
@@ -127,6 +130,31 @@ try {
     $null = Invoke-Hook -EventName 'UserPromptSubmit' -SessionId 'session-test-2' -TurnId 'turn-test-2'
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
     Assert-Equal 2 @($state.sessions).Count 'Multiple sessions should be preserved.'
+
+    $internalPrompt = @'
+# Overview
+
+Generate 0 to 3 hyperpersonalized suggestions for what this user can do with Codex in this local project: D:\随便玩玩
+'@
+    $output = Invoke-Hook -EventName 'UserPromptSubmit' -SessionId 'internal-suggestion-session' -TurnId 'internal-turn' -Prompt $internalPrompt
+    Assert-NoOutput $output 'Internal Codex suggestion prompts must remain silent.'
+    $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    Assert-Equal 2 @($state.sessions).Count 'Internal Codex suggestion sessions must not be added to visible state.'
+    Assert-True (Test-Path -LiteralPath $ignoredCodexSessionsPath -PathType Leaf) 'Internal Codex suggestion session should be remembered privately.'
+    $ignoredRegistry = [System.IO.File]::ReadAllText($ignoredCodexSessionsPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    Assert-Equal 'internal-suggestion-session' ([string]@($ignoredRegistry.sessions)[0].sessionId) 'Ignored Codex session identity mismatch.'
+
+    $output = Invoke-Hook -EventName 'PermissionRequest' -SessionId 'internal-suggestion-session' -TurnId 'internal-turn'
+    Assert-NoOutput $output 'Later events from an ignored Codex session must remain silent.'
+    $output = Invoke-Hook -EventName 'Stop' -SessionId 'internal-suggestion-session' -TurnId 'internal-turn'
+    Assert-Equal '{"continue":true}' ([string]$output) 'Ignored Codex Stop must retain the non-blocking hook response.'
+    $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    Assert-Equal 2 @($state.sessions).Count 'Later events from an ignored Codex session must not enter visible state.'
+
+    $similarUserPrompt = 'Please explain: Generate 0 to 3 hyperpersonalized suggestions for what this user can do with Codex.'
+    $null = Invoke-Hook -EventName 'UserPromptSubmit' -SessionId 'ordinary-terra-session' -TurnId 'ordinary-terra-turn' -Prompt $similarUserPrompt
+    $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    Assert-Equal 3 @($state.sessions).Count 'Ordinary Codex prompts must not be filtered by similar text or model.'
 
     $output = Invoke-ClaudeHook -EventName 'UserPromptSubmit' -PromptId 'claude-turn-1'
     Assert-NoOutput $output 'Claude UserPromptSubmit must not write model-visible output.'
@@ -295,6 +323,13 @@ try {
     Start-Sleep -Seconds 1
 
     $permissionWatcherReadyPath = Join-Path $testRoot 'permission-watcher.ready'
+    $fakeClaudePath = Join-Path $testRoot 'claude.exe'
+    $fakeShellSignal = Join-Path $testRoot 'start-shell.signal'
+    $fakeClaudeCommand = Join-Path $testRoot 'start-shell.cmd'
+    Copy-Item -LiteralPath $env:ComSpec -Destination $fakeClaudePath -Force
+    $fakeCommands = @('@echo off', ':wait', ('if exist "{0}" goto run' -f $fakeShellSignal), 'ping -n 2 127.0.0.1 >nul', 'goto wait', ':run', 'powershell.exe -NoProfile -Command "Start-Sleep -Seconds 12"')
+    [System.IO.File]::WriteAllLines($fakeClaudeCommand, $fakeCommands, [System.Text.Encoding]::Default)
+    $fakeClaudeProcess = Start-Process -FilePath $fakeClaudePath -ArgumentList ('/c "{0}"' -f $fakeClaudeCommand) -WindowStyle Hidden -PassThru
     $directPermissionWatcher = Start-Process -FilePath $windowsPowerShell `
         -ArgumentList @(
             '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
@@ -302,6 +337,7 @@ try {
             '-SessionId', 'claude-session-started',
             '-TranscriptPath', "`"$startedTranscriptPath`"",
             '-ToolName', 'Bash',
+            '-ClaudeProcessId', [string]$fakeClaudeProcess.Id,
             '-TimeoutSeconds', '8',
             '-ExecutionTimeoutSeconds', '8',
             '-HeartbeatSeconds', '1',
@@ -314,11 +350,7 @@ try {
     }
     Assert-True (Test-Path -LiteralPath $permissionWatcherReadyPath) 'Permission watcher did not finish its initial process snapshot.'
 
-    $fakeClaudePath = Join-Path $testRoot 'claude.exe'
-    Copy-Item -LiteralPath $env:ComSpec -Destination $fakeClaudePath -Force
-    $fakeClaudeProcess = Start-Process -FilePath $fakeClaudePath `
-        -ArgumentList @('/c', 'powershell.exe -NoProfile -Command "Start-Sleep -Seconds 8"') `
-        -WindowStyle Hidden -PassThru
+    [System.IO.File]::WriteAllText($fakeShellSignal, '')
 
     $startedState = $null
     $startedDeadline = (Get-Date).AddSeconds(4)

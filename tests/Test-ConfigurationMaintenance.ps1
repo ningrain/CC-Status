@@ -154,6 +154,15 @@ trusted_hash = "sha256:unrelated"
 
     $invalidJson = '{"env":'
     Write-TestSettings -Json $invalidJson
+    # A broken Claude config must not prevent independently repairing Codex.
+    [System.IO.File]::WriteAllText($codexHooksPath, '{"customMarker":"codex-only"}', [System.Text.UTF8Encoding]::new($false))
+    Wait-ForCondition -FailureMessage 'Codex-only changes were not repaired while Claude JSON was invalid.' -Condition {
+        try {
+            $config = [System.IO.File]::ReadAllText($codexHooksPath) | ConvertFrom-Json
+            return $config.customMarker -eq 'codex-only' -and $null -ne $config.hooks.UserPromptSubmit
+        }
+        catch { return $false }
+    }
     Start-Sleep -Seconds 4
     $afterInvalid = [System.IO.File]::ReadAllText($settingsPath, [System.Text.UTF8Encoding]::new($false))
     if ($afterInvalid -ne $invalidJson) { throw 'Transient invalid JSON was overwritten.' }
@@ -166,6 +175,17 @@ trusted_hash = "sha256:unrelated"
         }
         catch { return $false }
     }
+
+    $claudeBefore = [System.IO.File]::ReadAllText($settingsPath)
+    [System.IO.File]::WriteAllText($codexHooksPath, '{"customMarker":"independent"}', [System.Text.UTF8Encoding]::new($false))
+    Wait-ForCondition -FailureMessage 'Codex changes required a Claude configuration change to be repaired.' -Condition {
+        try {
+            $config = [System.IO.File]::ReadAllText($codexHooksPath) | ConvertFrom-Json
+            return $config.customMarker -eq 'independent' -and $null -ne $config.hooks.Stop
+        }
+        catch { return $false }
+    }
+    if ([System.IO.File]::ReadAllText($settingsPath) -ne $claudeBefore) { throw 'Codex-only repair rewrote Claude settings.' }
 
     Write-Host 'Configuration maintenance tests passed.' -ForegroundColor Green
 }

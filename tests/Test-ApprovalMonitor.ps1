@@ -15,7 +15,6 @@ function Assert-Equal {
 
 $script:CodexApprovalLogCursor = 0L
 $script:CodexApprovalStates = @{}
-$script:CodexApprovalDeniedThreads = @{}
 $threadId = '11111111-2222-3333-4444-555555555555'
 $turnId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
 $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -38,8 +37,7 @@ $resolution = [pscustomobject]@{
     Body = "thread_id=$threadId op: ExecApproval turn_id: Some(`"$turnId`") decision: Denied"
 }
 Update-CodexApprovalStates -Rows @($resolution)
-Assert-Equal $script:CodexApprovalStates.ContainsKey($threadId) $false 'Resolved approval was not cleared.'
-Assert-Equal $script:CodexApprovalDeniedThreads.ContainsKey($threadId) $true 'Denied approval thread was not recorded.'
+Assert-Equal $script:CodexApprovalStates[$threadId].status 'working' 'Denied permission should return control to the active turn.'
 Assert-Equal $script:CodexApprovalLogCursor 11 'Approval log cursor mismatch.'
 
 $ordinaryCompletion = [pscustomobject]@{
@@ -50,7 +48,8 @@ $ordinaryCompletion = [pscustomobject]@{
     Body = "thread_id=$threadId turn_id=$turnId tool call completed"
 }
 Update-CodexApprovalStates -Rows @($ordinaryCompletion)
-Assert-Equal $script:CodexApprovalStates.Count 0 'Ordinary tool completion created a false working state.'
+Assert-Equal $script:CodexApprovalStates[$threadId].status 'working' 'A denied permission should stay resolved until the turn ends.'
+$script:CodexApprovalStates.Clear()
 
 $legacyThreadId = '22222222-3333-4444-5555-666666666666'
 $legacyTurnId = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff'
@@ -73,7 +72,6 @@ $legacyResolution = [pscustomobject]@{
 }
 Update-CodexApprovalStates -Rows @($legacyResolution)
 Assert-Equal $script:CodexApprovalStates[$legacyThreadId].status 'working' 'Approved command did not return to working state before completion.'
-Assert-Equal $script:CodexApprovalDeniedThreads.ContainsKey($legacyThreadId) $false 'Approved approval thread was incorrectly recorded as denied.'
 
 $legacyCompletion = [pscustomobject]@{
     Id = 15L
@@ -147,5 +145,48 @@ $responseOnlyCompletion = [pscustomobject]@{
 Update-CodexApprovalStates -Rows @($responseOnlyCompletion)
 Assert-Equal $script:CodexApprovalStates[$responseOnlyThreadId].status 'working' 'Response-only approval returned to approval after tool completion.'
 Assert-Equal $script:CodexApprovalStates[$responseOnlyThreadId].updatedAt ([DateTimeOffset]::FromUnixTimeSeconds($now + 8).ToString('o')) 'Response-only completion did not refresh working state.'
+
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class ApprovalTestDatabase {
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_open_v2(byte[] path, out IntPtr db, int flags, IntPtr vfs);
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_exec(IntPtr db, byte[] sql, IntPtr callback, IntPtr argument, IntPtr error);
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_close(IntPtr db);
+    public static void Create(string path, string sql) {
+        IntPtr db = IntPtr.Zero;
+        try {
+            if (sqlite3_open_v2(Encoding.UTF8.GetBytes(path + "\0"), out db, 6, IntPtr.Zero) != 0)
+                throw new Exception("Could not create SQLite fixture.");
+            if (sqlite3_exec(db, Encoding.UTF8.GetBytes(sql + "\0"), IntPtr.Zero, IntPtr.Zero, IntPtr.Zero) != 0)
+                throw new Exception("Could not populate SQLite fixture.");
+        }
+        finally { if (db != IntPtr.Zero) sqlite3_close(db); }
+    }
+}
+'@
+$databaseRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '.test-approval-reader'))
+if (-not $databaseRoot.StartsWith($PSScriptRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid fixture root.' }
+$null = New-Item -ItemType Directory -Path $databaseRoot -Force
+try {
+    foreach ($precise in @($false, $true)) {
+        $path = Join-Path $databaseRoot ([Guid]::NewGuid().ToString('N') + '.sqlite')
+        $column = if ($precise) { ', ts_nanos INTEGER' } else { '' }
+        $value = if ($precise) { ', 500000000' } else { '' }
+        $sql = "CREATE TABLE logs (id INTEGER, ts INTEGER, target TEXT, feedback_log_body TEXT, thread_id TEXT$column); INSERT INTO logs VALUES (1, 1000, 'codex_core::session::handlers', 'op: ExecApproval decision: Denied', '$threadId'$value);"
+        [ApprovalTestDatabase]::Create($path, $sql)
+        $rows = @([CodexSqliteApprovalReader]::ReadRows($path, 0))
+        Assert-Equal $rows.Count 1 'SQLite reader failed for a supported log schema.'
+        $expected = if ($precise) { 500000000L } else { $null }
+        Assert-Equal $rows[0].TimestampNanos $expected 'SQLite timestamp precision was lost.'
+        $time = Get-CodexLogTimestamp $rows[0]
+        Assert-Equal $time.Millisecond $(if ($precise) { 500 } else { 0 }) 'Nanoseconds were converted incorrectly.'
+    }
+}
+finally { Remove-Item -LiteralPath $databaseRoot -Recurse -Force }
 
 Write-Host 'Approval monitor tests passed.' -ForegroundColor Green

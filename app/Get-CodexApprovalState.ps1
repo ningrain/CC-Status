@@ -14,6 +14,7 @@ public sealed class CodexApprovalLogRow
 {
     public long Id { get; set; }
     public long Timestamp { get; set; }
+    public long? TimestampNanos { get; set; }
     public string Target { get; set; }
     public string Body { get; set; }
     public string ThreadId { get; set; }
@@ -33,6 +34,8 @@ public static class CodexSqliteApprovalReader
     private static extern int sqlite3_step(IntPtr statement);
     [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern long sqlite3_column_int64(IntPtr statement, int column);
+    [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int sqlite3_column_type(IntPtr statement, int column);
     [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern IntPtr sqlite3_column_text(IntPtr statement, int column);
     [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
@@ -73,7 +76,7 @@ public static class CodexSqliteApprovalReader
             sqlite3_busy_timeout(db, 150);
             string lowerBound = afterId > 0 ? afterId.ToString() : "(SELECT COALESCE(MAX(id),0)-20000 FROM logs)";
             string sql =
-                "SELECT id, ts, target, feedback_log_body, COALESCE(thread_id,'') FROM logs " +
+                "SELECT id, ts, target, feedback_log_body, COALESCE(thread_id,''), ts_nanos FROM logs " +
                 "WHERE id > " + lowerBound + " AND (" +
                 "(target='codex_core::stream_events_utils' AND feedback_log_body LIKE '%sandbox_permissions%require_escalated%') OR " +
                 "(target='codex_core::stream_events_utils' AND feedback_log_body LIKE '%tool_name=\"request_permissions\"%') OR " +
@@ -82,12 +85,19 @@ public static class CodexSqliteApprovalReader
                 "(target='codex_core::tools::parallel' AND feedback_log_body LIKE '%tool call completed%')" +
                 ") ORDER BY id";
             byte[] sqlBytes = Utf8(sql);
-            if (sqlite3_prepare_v2(db, sqlBytes, sqlBytes.Length - 1, out statement, IntPtr.Zero) != SQLITE_OK) return rows.ToArray();
+            if (sqlite3_prepare_v2(db, sqlBytes, sqlBytes.Length - 1, out statement, IntPtr.Zero) != SQLITE_OK) {
+                if (statement != IntPtr.Zero) sqlite3_finalize(statement);
+                statement = IntPtr.Zero;
+                // Older log schemas stored only whole seconds.
+                sqlBytes = Utf8(sql.Replace(", ts_nanos FROM logs", ", NULL FROM logs"));
+                if (sqlite3_prepare_v2(db, sqlBytes, sqlBytes.Length - 1, out statement, IntPtr.Zero) != SQLITE_OK) return rows.ToArray();
+            }
             while (sqlite3_step(statement) == SQLITE_ROW)
             {
                 rows.Add(new CodexApprovalLogRow {
                     Id = sqlite3_column_int64(statement, 0),
                     Timestamp = sqlite3_column_int64(statement, 1),
+                    TimestampNanos = sqlite3_column_type(statement, 5) == 5 ? (long?)null : sqlite3_column_int64(statement, 5),
                     Target = Text(statement, 2),
                     Body = Text(statement, 3),
                     ThreadId = Text(statement, 4)
@@ -110,9 +120,6 @@ if ($null -eq (Get-Variable -Name CodexApprovalLogCursor -Scope Script -ErrorAct
 }
 if ($null -eq (Get-Variable -Name CodexApprovalStates -Scope Script -ErrorAction SilentlyContinue)) {
     $script:CodexApprovalStates = @{}
-}
-if ($null -eq (Get-Variable -Name CodexApprovalDeniedThreads -Scope Script -ErrorAction SilentlyContinue)) {
-    $script:CodexApprovalDeniedThreads = @{}
 }
 
 function Get-CodexLogIdentity {
@@ -137,6 +144,15 @@ function Get-CodexLogIdentity {
     return [pscustomobject]@{ threadId = $threadId; turnId = $turnId }
 }
 
+function Get-CodexLogTimestamp {
+    param([object]$Row)
+    $timestamp = [DateTimeOffset]::FromUnixTimeSeconds([long]$Row.Timestamp)
+    if ($null -ne $Row.PSObject.Properties['TimestampNanos'] -and $null -ne $Row.TimestampNanos) {
+        $timestamp = $timestamp.AddTicks([long][Math]::Floor([double]$Row.TimestampNanos / 100.0))
+    }
+    return $timestamp
+}
+
 function Update-CodexApprovalStates {
     param([object[]]$Rows)
 
@@ -154,8 +170,7 @@ function Update-CodexApprovalStates {
             ([string]$row.Target -eq 'codex_core::stream_events_utils' -and [string]$row.Body -match '(?s)sandbox_permissions"?\s*[:=]\s*"require_escalated"') -or
             ([string]$row.Target -eq 'codex_core::stream_events_utils' -and [string]$row.Body -match 'tool_name="request_permissions"')
         if ($isApprovalRequest) {
-            $timestamp = [DateTimeOffset]::FromUnixTimeSeconds([long]$row.Timestamp).ToString('o')
-            $script:CodexApprovalDeniedThreads.Remove($identity.threadId)
+            $timestamp = (Get-CodexLogTimestamp -Row $row).ToString('o')
             $script:CodexApprovalStates[$identity.threadId] = [pscustomobject][ordered]@{
                 provider = 'codex'
                 sessionId = $identity.threadId
@@ -173,33 +188,30 @@ function Update-CodexApprovalStates {
         # Codex builds can emit PermissionRequest only through the hook while the
         # SQLite log starts with the approval response. Treat an explicit response
         # as authoritative even when no matching request row was observed.
-        $isDenied = [string]$row.Body -match '(?i)\b(denied|rejected|declined|canceled|cancelled)\b'
         $isApprovalResponse =
             [string]$row.Target -eq 'codex_core::session::handlers' -and
             [string]$row.Body -match 'op:\s*(ExecApproval|RequestPermissionsResponse)'
         if ($isApprovalResponse) {
-            if ($isDenied) {
-                $script:CodexApprovalDeniedThreads[$identity.threadId] = [DateTimeOffset]::UtcNow
-                $script:CodexApprovalStates.Remove($identity.threadId)
-            }
-            else {
-                $timestamp = [DateTimeOffset]::FromUnixTimeSeconds([long]$row.Timestamp).ToString('o')
-                $existing = if ($script:CodexApprovalStates.ContainsKey($identity.threadId)) { $script:CodexApprovalStates[$identity.threadId] } else { $null }
-                $sameTurn = $null -ne $existing -and (
-                    [string]::IsNullOrWhiteSpace([string]$identity.turnId) -or
-                    [string]$existing.turnId -eq [string]$identity.turnId
-                )
-                $script:CodexApprovalStates[$identity.threadId] = [pscustomobject][ordered]@{
-                    provider = 'codex'
-                    sessionId = $identity.threadId
-                    turnId = if (-not [string]::IsNullOrWhiteSpace([string]$identity.turnId)) { [string]$identity.turnId } elseif ($sameTurn) { [string]$existing.turnId } else { '' }
-                    status = 'working'
-                    startedAt = if ($sameTurn) { [string]$existing.startedAt } else { $timestamp }
-                    updatedAt = $timestamp
-                    cwd = if ($sameTurn) { [string]$existing.cwd } else { '' }
-                    model = if ($sameTurn) { [string]$existing.model } else { '' }
-                    source = 'app-log'
-                }
+            # Either decision resolves this permission request. A denied tool
+            # does not end the agent turn; rollout lifecycle events decide that.
+            $timestamp = (Get-CodexLogTimestamp -Row $row).ToString('o')
+            $existing = if ($script:CodexApprovalStates.ContainsKey($identity.threadId)) { $script:CodexApprovalStates[$identity.threadId] } else { $null }
+            $sameTurn = $null -ne $existing -and (
+                [string]::IsNullOrWhiteSpace([string]$identity.turnId) -or
+                [string]$existing.turnId -eq [string]$identity.turnId
+            )
+            $script:CodexApprovalStates[$identity.threadId] = [pscustomobject][ordered]@{
+                provider = 'codex'
+                sessionId = $identity.threadId
+                turnId = if (-not [string]::IsNullOrWhiteSpace([string]$identity.turnId)) { [string]$identity.turnId } elseif ($sameTurn) { [string]$existing.turnId } else { '' }
+                status = 'working'
+                startedAt = if ($sameTurn) { [string]$existing.startedAt } else { $timestamp }
+                updatedAt = $timestamp
+                cwd = if ($sameTurn) { [string]$existing.cwd } else { '' }
+                model = if ($sameTurn) { [string]$existing.model } else { '' }
+                source = 'app-log'
+                approvalResolvedAt = $timestamp
+                approvalTimestampPrecise = $null -ne $row.PSObject.Properties['TimestampNanos'] -and $null -ne $row.TimestampNanos
             }
             continue
         }
@@ -213,7 +225,7 @@ function Update-CodexApprovalStates {
                     # active until its rollout emits task_complete/turn_aborted.
                     # Keep a newer working record so the older PermissionRequest
                     # hook cannot become authoritative again in the meantime.
-                    $existing.updatedAt = [DateTimeOffset]::FromUnixTimeSeconds([long]$row.Timestamp).ToString('o')
+                    $existing.updatedAt = (Get-CodexLogTimestamp -Row $row).ToString('o')
                 }
                 else {
                     $script:CodexApprovalStates.Remove($identity.threadId)
@@ -221,26 +233,6 @@ function Update-CodexApprovalStates {
             }
         }
     }
-}
-
-function Get-CodexApprovalDeniedThreadIds {
-    [CmdletBinding()]
-    param(
-        [TimeSpan]$MaximumAge = ([TimeSpan]::FromMinutes(10))
-    )
-
-    $cutoff = [DateTimeOffset]::UtcNow.Subtract($MaximumAge)
-    foreach ($key in @($script:CodexApprovalDeniedThreads.Keys)) {
-        try {
-            if ([DateTimeOffset]$script:CodexApprovalDeniedThreads[$key] -lt $cutoff) {
-                $script:CodexApprovalDeniedThreads.Remove($key)
-            }
-        }
-        catch {
-            $script:CodexApprovalDeniedThreads.Remove($key)
-        }
-    }
-    return @($script:CodexApprovalDeniedThreads.Keys)
 }
 
 function Get-CodexLogApprovalSessions {

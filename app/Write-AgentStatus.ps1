@@ -11,6 +11,7 @@ $providerName = $Provider.ToLowerInvariant()
 $appRoot = $PSScriptRoot
 $dataRoot = Join-Path $appRoot 'data'
 $statePath = Join-Path $dataRoot 'state.json'
+$ignoredCodexSessionsPath = Join-Path $dataRoot 'ignored-codex-sessions.json'
 $logPath = Join-Path $dataRoot 'hook-errors.log'
 $permissionWatcherPath = Join-Path $appRoot 'Watch-ClaudePermission.ps1'
 $turnWatcherPath = Join-Path $appRoot 'Watch-ClaudeTurn.ps1'
@@ -60,6 +61,92 @@ function Get-ExistingProvider {
     return $value.ToLowerInvariant()
 }
 
+function Test-CodexInternalSuggestionPrompt {
+    param([string]$Prompt)
+
+    if ([string]::IsNullOrWhiteSpace($Prompt)) { return $false }
+    return $Prompt.TrimStart() -match '(?is)^(?:# Overview\s+)?Generate 0 to 3 hyperpersonalized suggestions for what this user can do with Codex in this local project:'
+}
+
+function Test-AndRememberIgnoredCodexSession {
+    param(
+        [Parameter(Mandatory)][string]$SessionId,
+        [Parameter(Mandatory)][string]$EventName,
+        [string]$Prompt = ''
+    )
+
+    $now = [DateTimeOffset]::UtcNow
+    $cutoff = $now.AddHours(-48)
+    $ignoredById = @{}
+    $registryChanged = $false
+
+    if (Test-Path -LiteralPath $ignoredCodexSessionsPath -PathType Leaf) {
+        try {
+            $registry = [System.IO.File]::ReadAllText($ignoredCodexSessionsPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+            foreach ($entry in @($registry.sessions)) {
+                try {
+                    $ignoredSessionId = Get-StringProperty -Object $entry -Name 'sessionId'
+                    $ignoredAt = [DateTimeOffset]::Parse((Get-StringProperty -Object $entry -Name 'ignoredAt'))
+                    if (-not [string]::IsNullOrWhiteSpace($ignoredSessionId) -and $ignoredAt -ge $cutoff) {
+                        $ignoredById[$ignoredSessionId] = $ignoredAt
+                    }
+                    else {
+                        $registryChanged = $true
+                    }
+                }
+                catch {
+                    $registryChanged = $true
+                }
+            }
+        }
+        catch {
+            $registryChanged = $true
+        }
+    }
+
+    if ($EventName -eq 'UserPromptSubmit' -and (Test-CodexInternalSuggestionPrompt -Prompt $Prompt)) {
+        $ignoredById[$SessionId] = $now
+        $registryChanged = $true
+    }
+
+    if ($registryChanged) {
+        $entries = @($ignoredById.GetEnumerator() | ForEach-Object {
+            [pscustomobject][ordered]@{
+                sessionId = [string]$_.Key
+                ignoredAt = ([DateTimeOffset]$_.Value).ToString('o')
+            }
+        })
+        $registryState = [pscustomobject][ordered]@{
+            version = 1
+            updatedAt = $now.ToString('o')
+            sessions = $entries
+        }
+        $tempPath = '{0}.{1}.tmp' -f $ignoredCodexSessionsPath, $PID
+        [System.IO.File]::WriteAllText(
+            $tempPath,
+            ($registryState | ConvertTo-Json -Depth 4),
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        Move-Item -LiteralPath $tempPath -Destination $ignoredCodexSessionsPath -Force
+    }
+
+    return $ignoredById.ContainsKey($SessionId)
+}
+
+function Get-ClaudeHookProcess {
+    $ancestorId = $PID
+    for ($depth = 0; $depth -lt 16 -and $ancestorId -gt 0; $depth++) {
+        $ancestor = Get-CimInstance Win32_Process -Filter "ProcessId=$ancestorId" -ErrorAction SilentlyContinue
+        if ($null -eq $ancestor) { return $null }
+        if ([string]$ancestor.Name -eq 'claude.exe' -or
+            ([string]$ancestor.Name -eq 'node.exe' -and [string]$ancestor.CommandLine -match '(?i)(claude-code|[\\/]claude(?:\.cmd|\.js)?(?:\s|$))')) {
+            return $ancestor
+        }
+        $ancestorId = [int]$ancestor.ParentProcessId
+    }
+    return $null
+}
+
 function Start-ClaudePermissionWatcher {
     param(
         [Parameter(Mandatory)][string]$SessionId,
@@ -90,6 +177,13 @@ function Start-ClaudePermissionWatcher {
         )
         if (-not [string]::IsNullOrWhiteSpace($ToolName)) {
             $argumentList += ('-ToolName "{0}"' -f $ToolName.Replace('"', '\"'))
+        }
+        if ($ToolName -eq 'Bash') {
+            $owner = Get-ClaudeHookProcess
+            if ($null -ne $owner) {
+                $argumentList += ('-ClaudeProcessId {0}' -f [int]$owner.ProcessId)
+                $argumentList += ('-ClaudeProcessStartTicks {0}' -f ([DateTime]$owner.CreationDate).ToUniversalTime().Ticks)
+            }
         }
         $watcher = Start-Process -FilePath $powershellPath -ArgumentList ($argumentList -join ' ') -WindowStyle Hidden -PassThru -ErrorAction SilentlyContinue
         if ($null -ne $watcher) {
@@ -210,6 +304,18 @@ try {
     $hasMutex = $mutex.WaitOne([TimeSpan]::FromSeconds(1))
     if (-not $hasMutex) {
         throw 'Timed out while waiting for the status state lock.'
+    }
+
+    if ($providerName -eq 'codex') {
+        $prompt = Get-StringProperty -Object $hook -Name 'prompt'
+        if (Test-AndRememberIgnoredCodexSession -SessionId $sessionId -EventName $hookEventName -Prompt $prompt) {
+            $mutex.ReleaseMutex()
+            $hasMutex = $false
+            if ($hookEventName -eq 'Stop') {
+                [Console]::Out.Write('{"continue":true}')
+            }
+            exit 0
+        }
     }
 
     $existingSessions = @()
@@ -346,6 +452,10 @@ try {
     $json = $state | ConvertTo-Json -Depth 8
     [System.IO.File]::WriteAllText($tempPath, $json, [System.Text.UTF8Encoding]::new($false))
     Move-Item -LiteralPath $tempPath -Destination $statePath -Force
+
+    # Process discovery and watcher startup must not hold up other hooks.
+    $mutex.ReleaseMutex()
+    $hasMutex = $false
 
     if ($providerName -eq 'claude' -and $hookEventName -eq 'PermissionRequest') {
         Start-ClaudePermissionWatcher -SessionId $sessionId -TranscriptPath $transcriptPath -ToolName $toolName

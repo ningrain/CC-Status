@@ -16,6 +16,25 @@
 
 - 暂无。
 
+## [1.2.0] - 2026-09-12
+
+### 新增
+
+- 系统托盘图标同步展示需要批准、工作中和已完成状态；窗口隐藏时，工作中图标使用低开销呼吸动画，无任务时恢复 CC Status 图标。
+
+### 变更
+
+- 用量统计改为后台增量读取，缓存日志目录与解析进度，读取失败时保留上一份可用结果，降低大型或持续增长日志对 Agent 运行的影响。
+- Codex 与 Claude Hook 配置改为独立监测和自动修复，并移除不必要的高频 PostToolUse 状态 Hook。
+- Claude Bash 状态监听限定到当前 Claude 进程树，避免多个 CLI 会话之间互相干扰。
+
+### 修复
+
+- 修复 Codex 批准结果与 PermissionRequest 到达顺序交错时，状态重新停留在“需要批准”的问题。
+- 修复 Codex Desktop 自动生成个性化建议时，被误计为第二个用户任务的问题。
+- 修复 Codex 累计用量快照重复计数、跨日基线错误及增量日志尾部不完整时游标提前的问题。
+- 修复大型日志记录和跨读取块 UTF-8 字符可能导致用量解析不完整的问题。
+
 ## [1.1.7] - 2026-08-30
 
 ### 新增
@@ -156,7 +175,8 @@
 - 修复瞬时文件访问失败可能导致组件退出的问题。
 - 修复运行中卸载后进程或托盘图标残留的问题。
 
-[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.1.7...HEAD
+[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/ningrain/CC-Status/compare/v1.1.7...v1.2.0
 [1.1.7]: https://github.com/ningrain/CC-Status/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/ningrain/CC-Status/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/ningrain/CC-Status/compare/v1.1.4...v1.1.5

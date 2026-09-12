@@ -80,6 +80,32 @@ function Get-AgentSessionIdentity {
     return $provider + '|' + $sessionKey
 }
 
+function Get-CodexIgnoredSessionIds {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow,
+        [TimeSpan]$MaximumAge = ([TimeSpan]::FromHours(48))
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
+
+    try {
+        $registry = [System.IO.File]::ReadAllText($Path, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+        $cutoff = $Now.Subtract($MaximumAge)
+        return @($registry.sessions | Where-Object {
+            try {
+                -not [string]::IsNullOrWhiteSpace([string]$_.sessionId) -and
+                    [DateTimeOffset]::Parse([string]$_.ignoredAt) -ge $cutoff
+            }
+            catch { $false }
+        } | ForEach-Object { [string]$_.sessionId })
+    }
+    catch {
+        return @()
+    }
+}
+
 function Test-CodexRolloutIsLive {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -108,17 +134,30 @@ function Resolve-CodexSessionStates {
     param(
         [object[]]$Sessions,
         [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow,
-        [TimeSpan]$OrphanGrace = ([TimeSpan]::FromSeconds(10))
+        [TimeSpan]$OrphanGrace = ([TimeSpan]::FromSeconds(10)),
+        [string[]]$IgnoredSessionIds = @()
     )
+
+    $ignoredSessionSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($ignoredSessionId in @($IgnoredSessionIds)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$ignoredSessionId)) {
+            $null = $ignoredSessionSet.Add([string]$ignoredSessionId)
+        }
+    }
 
     $surfaceBySession = @{}
     $terminalByTurn = @{}
     $orphanedWorkingTurns = @{}
+    $approvalResponses = @{}
 
     foreach ($session in @($Sessions)) {
         $sessionId = [string]$session.sessionId
+        if ($ignoredSessionSet.Contains($sessionId)) { continue }
         $turnId = [string]$session.turnId
         $sessionKey = Get-AgentSessionIdentity -Session $session
+        if ($null -ne $session.PSObject.Properties['approvalResolvedAt']) {
+            $approvalResponses[$sessionKey] = $session
+        }
         if (-not [string]::IsNullOrWhiteSpace($sessionKey) -and $null -ne $session.PSObject.Properties['surface'] -and -not [string]::IsNullOrWhiteSpace([string]$session.surface)) {
             $surfaceBySession[$sessionKey] = [string]$session.surface
         }
@@ -148,8 +187,24 @@ function Resolve-CodexSessionStates {
     $filtered = New-Object System.Collections.ArrayList
     foreach ($session in @($Sessions)) {
         $sessionId = [string]$session.sessionId
+        if ($ignoredSessionSet.Contains($sessionId)) { continue }
         $turnId = [string]$session.turnId
         $turnKey = if (-not [string]::IsNullOrWhiteSpace($sessionId) -and -not [string]::IsNullOrWhiteSpace($turnId)) { (Get-AgentSessionProvider -Session $session) + '|' + $sessionId + '|' + $turnId } else { '' }
+
+        $sessionKey = Get-AgentSessionIdentity -Session $session
+        if ([string]$session.status -eq 'approval' -and $approvalResponses.ContainsKey($sessionKey)) {
+            $response = $approvalResponses[$sessionKey]
+            $sameTurn = -not [string]::IsNullOrWhiteSpace($turnId) -and $turnId -eq [string]$response.turnId
+            $requestedAt = [DateTimeOffset]::Parse([string]$session.updatedAt)
+            $resolvedAt = [DateTimeOffset]::Parse([string]$response.approvalResolvedAt)
+            $precise = $null -ne $response.PSObject.Properties['approvalTimestampPrecise'] -and [bool]$response.approvalTimestampPrecise
+            # Preserve subsecond ordering when available; old schemas only
+            # identify the second containing the request/response pair.
+            $resolved = if ($precise) { $requestedAt -le $resolvedAt } else { $requestedAt.ToUnixTimeSeconds() -le $resolvedAt.ToUnixTimeSeconds() }
+            if ($sameTurn -and $resolved) {
+                continue
+            }
+        }
 
         if ($turnKey -and $terminalByTurn.ContainsKey($turnKey)) {
             $isAuthoritativeTerminal = $null -ne $session.PSObject.Properties['source'] -and [string]$session.source -eq 'rollout' -and [string]$session.status -in @('completed', 'cancelled')

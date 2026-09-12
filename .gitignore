@@ -9,6 +9,7 @@ app/data/settings.json
 app/data/*.log
 app/data/*.pid
 app/data/state.json
+app/data/ignored-codex-sessions.json
 app/data/*.request
 
 # Generated installer build artifacts
