@@ -16,6 +16,21 @@
 
 - 暂无。
 
+## [1.2.1] - 2026-10-03
+
+### 新增
+
+- 暂无。
+
+### 变更
+
+- 更新 README 的下载、源码运行、提示音、托盘状态、用量悬停、Hooks 与卸载说明，移除开发验证章节。
+- 忽略本地生成的无命令行窗口源码启动器，避免将生成文件提交到仓库。
+
+### 修复
+
+- 修复 Codex Desktop 在无项目任务（Projectless task）中自动生成个性化建议时，被误计为用户任务并显示“工作中”的问题；补充后续批准、停止事件及正常用户提示的回归测试。
+
 ## [1.2.0] - 2026-09-12
 
 ### 新增
@@ -175,7 +190,8 @@
 - 修复瞬时文件访问失败可能导致组件退出的问题。
 - 修复运行中卸载后进程或托盘图标残留的问题。
 
-[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/ningrain/CC-Status/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/ningrain/CC-Status/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/ningrain/CC-Status/compare/v1.1.7...v1.2.0
 [1.1.7]: https://github.com/ningrain/CC-Status/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/ningrain/CC-Status/compare/v1.1.5...v1.1.6

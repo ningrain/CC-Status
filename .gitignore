@@ -15,5 +15,8 @@ app/data/*.request
 # Generated installer build artifacts
 installer/build/*
 
+# Local windowless source launcher
+app/CCStatusControl.exe
+
 # Temporary distribution output
 dist/*
