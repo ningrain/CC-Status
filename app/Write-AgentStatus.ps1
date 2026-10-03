@@ -65,7 +65,7 @@ function Test-CodexInternalSuggestionPrompt {
     param([string]$Prompt)
 
     if ([string]::IsNullOrWhiteSpace($Prompt)) { return $false }
-    return $Prompt.TrimStart() -match '(?is)^(?:# Overview\s+)?Generate 0 to 3 hyperpersonalized suggestions for what this user can do with Codex in this local project:'
+    return $Prompt.TrimStart() -match '(?is)^(?:# Overview\s+)?Generate 0 to 3 hyperpersonalized suggestions for what this user can do with Codex in this (?:local project:|Projectless task[ \t]*(?:\r?\n|$))'
 }
 
 function Test-AndRememberIgnoredCodexSession {

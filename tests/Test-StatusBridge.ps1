@@ -151,7 +151,33 @@ Generate 0 to 3 hyperpersonalized suggestions for what this user can do with Cod
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
     Assert-Equal 2 @($state.sessions).Count 'Later events from an ignored Codex session must not enter visible state.'
 
-    $similarUserPrompt = 'Please explain: Generate 0 to 3 hyperpersonalized suggestions for what this user can do with Codex.'
+    $projectlessPrompt = 'Generate 0 to 3 hyperpersonalized suggestions for what this user can do with Codex in this Projectless task'
+    $projectlessTemplates = @(
+        ("# Overview`r`n`r`n" + $projectlessPrompt + "`r`n`r`nGet an understanding of the user's intent and goals by deeply viewing their connected apps."),
+        $projectlessPrompt
+    )
+    for ($index = 0; $index -lt $projectlessTemplates.Count; $index++) {
+        $backgroundSessionId = 'internal-projectless-session-' + $index
+        $output = Invoke-Hook -EventName 'UserPromptSubmit' -SessionId $backgroundSessionId -TurnId 'projectless-turn' -Prompt $projectlessTemplates[$index]
+        Assert-NoOutput $output 'Projectless Codex suggestion prompts must remain silent.'
+        $stateBeforeLaterEvents = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false))
+        $state = $stateBeforeLaterEvents | ConvertFrom-Json
+        Assert-Equal 2 @($state.sessions).Count 'Projectless Codex suggestions must not enter visible state.'
+        Assert-Equal 1 @($state.sessions | Where-Object { $_.status -eq 'working' }).Count 'Only the real user task should remain working.'
+        $ignoredRegistryText = [System.IO.File]::ReadAllText($ignoredCodexSessionsPath, [System.Text.UTF8Encoding]::new($false))
+        $ignoredRegistry = $ignoredRegistryText | ConvertFrom-Json
+        Assert-Equal 1 @($ignoredRegistry.sessions | Where-Object { $_.sessionId -eq $backgroundSessionId }).Count 'Projectless suggestion identity must be remembered for later events.'
+        Assert-True (-not ($ignoredRegistryText -match 'hyperpersonalized|connected apps')) 'Ignored session registry must not persist prompt contents.'
+
+        $output = Invoke-Hook -EventName 'PermissionRequest' -SessionId $backgroundSessionId -TurnId 'projectless-turn'
+        Assert-NoOutput $output 'Ignored Projectless approval events must remain silent.'
+        $output = Invoke-Hook -EventName 'Stop' -SessionId $backgroundSessionId -TurnId 'projectless-turn'
+        Assert-Equal '{"continue":true}' ([string]$output) 'Ignored Projectless Stop must retain the non-blocking response.'
+        $stateAfterLaterEvents = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false))
+        Assert-Equal $stateBeforeLaterEvents $stateAfterLaterEvents 'Later Projectless events must not alter user task state.'
+    }
+
+    $similarUserPrompt = 'Please explain: ' + $projectlessPrompt
     $null = Invoke-Hook -EventName 'UserPromptSubmit' -SessionId 'ordinary-terra-session' -TurnId 'ordinary-terra-turn' -Prompt $similarUserPrompt
     $state = [System.IO.File]::ReadAllText($statePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
     Assert-Equal 3 @($state.sessions).Count 'Ordinary Codex prompts must not be filtered by similar text or model.'
